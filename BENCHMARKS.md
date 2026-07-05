@@ -152,15 +152,27 @@ an ECDSA signature (and see finding 4 for OLS's other answer to that attack).
    a parity trap for any multi-core TLS comparison (first probe: 2.9k
    handshakes/s at p50 1.5 ms; 4.5k after `--workers=6`).
 
-6. **Envoy's HTTP cache filter (SimpleHttpCache) never served a hit in our
-   setup** — verified on v1.33 and v1.35, with `cache_filter:trace` logging:
-   every request runs a lookup, misses, fetches upstream, and inserts; the next
-   identical request (same worker, same connection, textbook-cacheable 200 with
-   `Cache-Control: public, max-age=300`, `Date`, `Content-Length`) misses again.
-   Under load the "cache-hit" scenario equals passthrough (10.0k vs 11.9k req/s
-   at the same CPU). Whatever the root cause, the filter also documents **no
-   purge/invalidation mechanism whatsoever**, so it cannot participate in
-   tag-based invalidation regardless. Not a candidate.
+6. **Envoy's HTTP cache filter cannot serve any response carrying a `Vary`
+   header — which is nearly every framework-rendered response.** Root-caused by
+   bisection against a synthetic upstream (nginx `return 200`), verified on
+   v1.33 and v1.35:
+   - identical response _without_ `Vary` → caches and serves hits (`Age` header
+     appears);
+   - add only `Vary: Accept-Encoding` → **zero hits, ever** — regardless of
+     `allowed_vary_headers` (`exact: "accept-encoding"` and `"Accept-Encoding"`
+     both ineffective) and regardless of whether the request sends
+     `Accept-Encoding`;
+   - setting `ignore_case: true` on the allowlist matcher **segfaults Envoy at
+     startup** (exit 139) — a second bug.
+
+   Since runtimes add `Vary: Accept-Encoding` automatically when compressing
+   (Deno.serve does, unremovably), the filter is effectively non-functional for
+   HTML app caching. Every other cache in this matrix handled the same header
+   without configuration. Under load the "cache-hit" scenario equaled
+   passthrough (10.0k vs 11.9k req/s at the same CPU). Independently
+   disqualifying: the filter documents **no purge/invalidation mechanism
+   whatsoever**. Both bugs are upstream-issue-worthy; either way, not a
+   candidate.
 
 ## Conclusions
 

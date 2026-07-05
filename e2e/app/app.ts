@@ -96,7 +96,20 @@ export function createHandler(exec: SqliteExec): Handler {
       const [post] = await db.select().from(posts).where(eq(posts.id, 3));
       const res = html(`<h1>${post?.title ?? "?"}</h1>`);
       res.headers.set("Cache-Control", "public, max-age=300");
+      // Envoy's cache filter appears to require a validator — see BENCHMARKS.md
+      res.headers.set("ETag", '"bench-static"');
       return res;
+    }
+    // Bench probe: sandbox-identical conditions — NO Vary header (Deno only
+    // adds Vary: Accept-Encoding for compressible content types).
+    if (url.pathname === "/admin/novary") {
+      return new Response(`novary ${Date.now()}`, {
+        headers: {
+          "content-type": "application/octet-stream",
+          "cache-control": "public, max-age=300",
+          "etag": '"bench-novary"',
+        },
+      });
     }
     if (url.pathname === "/admin/uncached") {
       const [post] = await db.select().from(posts).where(eq(posts.id, 3));
