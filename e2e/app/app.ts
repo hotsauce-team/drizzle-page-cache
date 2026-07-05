@@ -88,6 +88,16 @@ export function createHandler(exec: SqliteExec): Handler {
     // the excluded /admin prefix (middleware adds no cache headers there) and
     // sends no-store explicitly, so every proxy passes it through. Measures
     // pure proxy passthrough overhead on cache misses.
+    // Bench probe: identical work, but plain `max-age` instead of the
+    // browser-safe `max-age=0, s-maxage=N` split. Exists to test caches
+    // whose RFC 7234 support is incomplete (Envoy's alpha filter ignores
+    // s-maxage — see BENCHMARKS.md).
+    if (url.pathname === "/admin/plainmax") {
+      const [post] = await db.select().from(posts).where(eq(posts.id, 3));
+      const res = html(`<h1>${post?.title ?? "?"}</h1>`);
+      res.headers.set("Cache-Control", "public, max-age=300");
+      return res;
+    }
     if (url.pathname === "/admin/uncached") {
       const [post] = await db.select().from(posts).where(eq(posts.id, 3));
       const res = html(`<h1>${post?.title ?? "?"}</h1>`);

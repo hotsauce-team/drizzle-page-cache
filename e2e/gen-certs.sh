@@ -13,4 +13,7 @@ docker run --rm -v "$PWD/certs:/certs" alpine/openssl sh -c \
   "chmod 644 /certs/key.pem /certs/cert.pem" 2>/dev/null ||
   docker run --rm -v "$PWD/certs:/certs" --entrypoint sh alpine/openssl -c \
     "chmod 644 /certs/key.pem /certs/cert.pem"
-echo "certs/cert.pem + certs/key.pem generated"
+# hitch wants key+cert concatenated in one PEM
+cat certs/key.pem certs/cert.pem > certs/hitch.pem
+chmod 644 certs/hitch.pem
+echo "certs/cert.pem + certs/key.pem + certs/hitch.pem generated"

@@ -39,6 +39,9 @@ containers_for() {
     ols) echo "$PREFIX-ols-1 $PREFIX-app-ols-1" ;;
     nginx) echo "$PREFIX-nginx-1 $PREFIX-app-1" ;;
     angie) echo "$PREFIX-angie-1 $PREFIX-app-1" ;;
+    varnish) echo "$PREFIX-varnish-1 $PREFIX-app-1" ;;
+    varnish-tls) echo "$PREFIX-hitch-1 $PREFIX-varnish-1 $PREFIX-app-1" ;;
+    envoy) echo "$PREFIX-envoy-1 $PREFIX-app-1" ;;
     *) echo "unknown target: $1" >&2; exit 1 ;;
   esac
 }
@@ -146,8 +149,8 @@ bench_one() {
   ' "$OUT/$label.json" "$cpu_before" "$cpu_after" "$mem_before" "$mem_after" "$mem_peak" "$label" "$OUT"
 }
 
-TARGETS=("${@:-app caddy ols nginx angie}")
-[ $# -eq 0 ] && TARGETS=(app caddy ols nginx angie)
+TARGETS=("${@:-app caddy ols nginx angie varnish envoy}")
+[ $# -eq 0 ] && TARGETS=(app caddy ols nginx angie varnish envoy)
 for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
   if [ "$t" = "app" ]; then
     # Direct app = the no-proxy baseline for both scenarios.
@@ -168,5 +171,10 @@ for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
   # rps here = full ECDSA handshakes/second. Cache-hit path so the origin
   # is never the bottleneck.
   echo "== bench: $t TLS handshake stress =="
-  NO_REUSE=1 bench_one "$t" "$t-tls-hs" /post/3 "https://$t"
+  if [ "$t" = "varnish" ]; then
+    # Varnish terminates no TLS — hitch does, speaking PROXY to varnish.
+    NO_REUSE=1 bench_one varnish-tls "varnish-tls-hs" /post/3 "https://hitch"
+  else
+    NO_REUSE=1 bench_one "$t" "$t-tls-hs" /post/3 "https://$t"
+  fi
 done

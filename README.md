@@ -102,13 +102,15 @@ public URL** (never the app directly — a purge header the proxy doesn't see
 purges nothing). Note OpenLiteSpeed batches purges internally, so eviction is
 eventually-consistent by a few seconds. Working OLS config in `e2e/ols/`.
 
-Is it fast? Run the local bench (`e2e/bench.sh`, k6 + cgroup CPU/peak-memory
-accounting over the e2e stack, including tuned bench-only nginx and Angie
-pairings — numbers only comparable within one machine/run). On our reference run
-OLS sat at statistical parity with nginx and Angie on throughput (within ~2%) at
-comparable CPU — while being the only one of the three with native tag purging —
-and beat Caddy+Souin(otter) by ~30% throughput at half the CPU. Full table in
-`SPEC.md`.
+Is it fast? See **[BENCHMARKS.md](BENCHMARKS.md)** — six open-source cache
+stacks measured (hits, uncached passthrough, TLS handshakes) with the bugs we
+found on the way. Or run the local bench (`e2e/bench.sh`, k6 + cgroup
+CPU/peak-memory accounting over the e2e stack, including tuned bench-only nginx
+and Angie pairings — numbers only comparable within one machine/run). On our
+reference run OLS sat at statistical parity with nginx and Angie on throughput
+(within ~2%) at comparable CPU — while being the only one of the three with
+native tag purging — and beat Caddy+Souin(otter) by ~30% throughput at half the
+CPU. Full table in `SPEC.md`.
 
 ## Observability
 

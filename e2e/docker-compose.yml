@@ -171,3 +171,45 @@ services:
     depends_on:
       app-bun:
         condition: service_healthy
+
+  # Bench-only pairing: Varnish (cache, no TLS) + hitch (TLS termination,
+  # PROXY protocol into varnish). The classic split-process stack.
+  varnish:
+    image: varnish:latest
+    command: >
+      varnishd -F -f /etc/varnish/default.vcl -s malloc,256m
+      -a http=:80,HTTP -a proxy=:8443,PROXY
+    volumes:
+      - ./varnish/default.vcl:/etc/varnish/default.vcl:ro
+    ports:
+      - "127.0.0.1:8086:80"
+    depends_on:
+      app:
+        condition: service_healthy
+
+  hitch:
+    image: hitch:latest
+    # --workers: hitch defaults to ONE worker — parity with the other
+    # servers requires matching the core count.
+    command: >
+      hitch --backend=[varnish]:8443 --frontend=[0.0.0.0]:443
+      --write-proxy-v2=on --alpn-protos=http/1.1 --workers=6
+      --user hitch --group hitch /certs/hitch.pem
+    volumes:
+      - ./certs:/certs:ro
+    depends_on:
+      - varnish
+
+  # Bench-only pairing: Envoy with the alpha HTTP cache filter (no purge
+  # mechanism exists for it — cannot join the tag-purge e2e).
+  envoy:
+    image: envoyproxy/envoy:v1.33-latest
+    command: ["envoy", "-c", "/etc/envoy/envoy.yaml"]
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./certs:/certs:ro
+    ports:
+      - "127.0.0.1:8087:80"
+    depends_on:
+      app:
+        condition: service_healthy

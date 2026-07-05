@@ -114,71 +114,10 @@ Derived from the benchmarked configs in
 https://claude.ai/code/artifact/9f7db1ca-3954-4dec-9143-94f0dd478540 (HotSauce
 vs WordPress report: proxy throughput, purge modules, invalidation table).
 
-**Local bench harness** (`e2e/bench.sh`, local-only, not CI): k6 in Docker
-drives cache-hit traffic per target; CPU from cgroup v2 `usage_usec` deltas and
-peak memory (`memory.peak`) summed across proxy + app containers. Targets
-include bench-only nginx and Angie pairings (no tag purging), tuned for parity:
-all cores (`worker_processes auto` / OLS `httpdWorkers`), in-memory cache
-storage (tmpfs `/dev/shm` for nginx/angie/OLS; otter is in-memory by design),
-upstream keepalive, logs off where possible.
-
-Reference run (5 Jul 2026, Docker VM on Apple Silicon, 6 vCPU, 8 VUs × 30 s,
-~150 B page — compare within one run only):
-
-| target                | req/s | p50 (ms) | CPU-ms/req |
-| --------------------- | ----- | -------- | ---------- |
-| direct app (no cache) | 10.4k | 0.61     | 0.097      |
-| Caddy + Souin (otter) | 37.3k | 0.15     | 0.051      |
-| OpenLiteSpeed         | 48.3k | 0.11     | 0.028      |
-| nginx                 | 49.4k | 0.11     | 0.021      |
-| Angie                 | 48.2k | 0.10     | 0.024      |
-
-nginx, Angie, and OLS are within ~2% on throughput — statistical parity — with
-nginx cheapest per request and OLS close behind while being the only one of the
-three with native tag purging. Caddy trails at ~76% throughput and ~2× CPU.
-
-**TLS handshake stress** (`*-tls-hs`: fresh connection per request via k6
-`noConnectionReuse`, HTTP/1.1 pinned with `GODEBUG=http2client=0` to avoid the
-ALPN/h2 confound, one shared self-signed ECDSA P-256 cert everywhere
-(`gen-certs.sh`), session cache AND tickets disabled on every server so each
-connection pays a FULL handshake — verified with `openssl s_client`, 0% failed
-requests). rps = full handshakes/second:
-
-| target        | handshakes/s | p50 (ms) | CPU-ms/req | TLS library |
-| ------------- | ------------ | -------- | ---------- | ----------- |
-| OpenLiteSpeed | 6,151        | 0.27     | 0.238      | BoringSSL   |
-| Angie         | 4,642        | 0.36     | 0.396      | OpenSSL     |
-| nginx         | 4,593        | 0.37     | 0.396      | OpenSSL     |
-| Caddy         | 4,568        | 0.36     | 0.385      | Go          |
-
-BoringSSL (OLS) delivers ~34% more full handshakes/s at ~40% less CPU; Go and
-OpenSSL are effectively tied. Two findings from the bring-up: (1) **OLS ships
-TLS-handshake-flood protection ON by default** (~200 new SSL connections/s per
-client IP → "possible SSL negotiation based attack, block!") — excellent for the
-budget-VPS resilience story, fatal for a single-IP bench; lifted via
-`perClientConnLimit` (marked BENCH ONLY in the config). Its first "result" was
-99.7% silent failures, so `bench.sh` now prints a loud WARNING whenever a run's
-failure rate exceeds 1%. (2) A Docker-VM clock jump can poison k6's `rate` (a
-901 s "request" inside a 1 s iteration) — sanity-check `count/rate ≈ duration`
-when a number looks absurd.
-
-**Uncached passthrough** (`/admin/uncached`: same DB work, `no-store`, under the
-excluded prefix; `bench.sh` asserts the route isn't cached before measuring).
-Same run: direct app 11.4k req/s @ p50 0.49 ms · Caddy 12.3k @ 0.54 · OLS 11.0k
-@ 0.59 · nginx 13.1k @ 0.50 · Angie 12.0k @ 0.51 — **every proxy is at
-direct-app parity within run variance** (the app render is the bottleneck); OLS
-adds ~0.1 ms p50, indistinguishable from the rest. The "OLS is slow at uncached"
-claim did not reproduce. One real finding: with a single cached `location`,
-**nginx/Angie `proxy_cache_lock` + a no-store response stalls waiting requests
-for `proxy_cache_lock_timeout` (5 s default)** — measured as 2.6k req/s with p50
-0.29 ms but max 5008 ms before the fix. Idiomatic fix (applied to the configs):
-a cache-free `location` for known-uncacheable prefixes. OLS and Caddy/Souin
-handle uncacheable responses gracefully without config help. Memory sums carry a
-caveat: caddy/nginx/angie share the same `app` container (whose V8 heap grows
-across earlier runs), so cross-target memory comparison is indicative only.
-Measured proxy-only idle memory (cgroup `memory.current`, 30 s after one warmed
-request): **OpenLiteSpeed 34 MB** with `httpdWorkers 6`; from the earlier
-report's harness: nginx ~16 MB, Angie/Caddy ~21 MB, Varnish ~107 MB.
+**Benchmarks** — full results, methodology, tuning parity, and the
+findings/footguns (Souin API bug, nginx cache-lock stalls, OLS TLS-flood
+protection, Envoy cache filter, hitch workers) live in
+[BENCHMARKS.md](BENCHMARKS.md). Local-only harness: `e2e/bench.sh`.
 
 ## Upstream issues to file
 
