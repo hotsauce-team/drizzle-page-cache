@@ -126,5 +126,7 @@ possible future addition if per-tenant table tags ever matter.
 v0.1 — core mechanism with the test matrix in `tests/`. See `SPEC.md` for the
 full design, verified constraints of drizzle-orm 0.45.x, and the roadmap (nested
 relation tags, Upstash `Cache` composition). The e2e purge-loop harness in
-`e2e/` runs the same app on **Deno and Node 24** behind Caddy/Souin — the Node
-entry is a ~40-line `node:http` adapter, everything else is shared.
+`e2e/` runs the same app on **Deno, Node 24, and Bun** behind Caddy/Souin — the
+Node entry is a ~40-line `node:http` adapter, Bun needs none (`Bun.serve` speaks
+`Request`/`Response`), and only the demo's sqlite backend differs per runtime
+(Bun ships `bun:sqlite`, not `node:sqlite`).

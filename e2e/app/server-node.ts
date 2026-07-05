@@ -4,7 +4,10 @@
 
 import { createServer, type IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
-import { handler } from "./app.ts";
+import { createHandler } from "./app.ts";
+import { exec } from "./db-node.ts";
+
+const handler = createHandler(exec);
 
 function toRequest(req: IncomingMessage): Request {
   const url = `http://${req.headers.host ?? "localhost"}${req.url ?? "/"}`;

@@ -39,6 +39,28 @@ services:
       timeout: 2s
       retries: 40
 
+  # Same app on Bun (container-only; Bun is never run on the host). Same
+  # read-only-mount workaround as app-node.
+  app-bun:
+    image: oven/bun:alpine
+    volumes:
+      - ../:/repo:ro
+    environment:
+      - PURGE_URL=http://caddy-bun/souin-api/souin
+    command: >
+      sh -c "cp -r /repo /tmp/pkg && cd /tmp/pkg
+      && printf '{\"type\":\"module\"}' > package.json
+      && bun add 'drizzle-orm@^0.45.1' --silent
+      && exec bun e2e/app/server-bun.ts"
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1:8000/ || exit 1",
+      ]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+
   caddy:
     build:
       context: .
@@ -71,4 +93,19 @@ services:
       - "127.0.0.1:8081:80"
     depends_on:
       app-node:
+        condition: service_healthy
+
+  caddy-bun:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]
+    environment:
+      - UPSTREAM=app-bun:8000
+    volumes:
+      - ./caddy.json:/etc/caddy/caddy.json:ro
+    ports:
+      - "127.0.0.1:8082:80"
+    depends_on:
+      app-bun:
         condition: service_healthy

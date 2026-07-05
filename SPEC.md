@@ -95,13 +95,16 @@ tags on POST / errors / excluded paths), the lazy-thenable regression.
 ## e2e (e2e/)
 
 Caddy (xcaddy: `darkweak/souin/plugins/caddy` + otter storage, Souin API enabled
-via patched JSON config) in front of the same app on **both runtimes**: a shared
-runtime-neutral `app.ts` (node:sqlite + drizzle + this package) with a Deno
-entry (`Deno.serve`) and a Node 24 entry (native type stripping; ~40-line
-`node:http` ↔ `Request`/`Response` adapter, the only Node-specific code). Loop:
+via patched JSON config) in front of the same app on **three runtimes**: a
+shared runtime-neutral `app.ts` (drizzle + this package; sqlite backend
+injected) with per-runtime entries — Deno (`Deno.serve` + `db-node.ts`), Node 24
+(native type stripping; ~40-line `node:http` ↔ `Request`/`Response` adapter +
+`db-node.ts`), and Bun (`Bun.serve`, no adapter, + `db-bun.ts`, container-only).
+Bun has **no `node:sqlite`** (verified 1.3.14) — the split into `db-node.ts` /
+`db-bun.ts` exists solely for that; the package itself is untouched. Loop:
 render → HIT → write → purge → MISS with fresh body —
-`./verify.sh caddy && ./verify.sh caddy-node`, both verified passing 5 Jul 2026.
-Derived from the benchmarked configs in
+`./verify.sh caddy && ./verify.sh caddy-node && ./verify.sh caddy-bun`, all
+three verified passing 5 Jul 2026. Derived from the benchmarked configs in
 https://claude.ai/code/artifact/9f7db1ca-3954-4dec-9143-94f0dd478540 (HotSauce
 vs WordPress report: proxy throughput, purge modules, invalidation table).
 
