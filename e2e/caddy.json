@@ -70,6 +70,120 @@
       "servers": {
         "srv0": {
           "listen": [
+            ":443"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "Configuration": {
+                    "API": {
+                      "basepath": "",
+                      "debug": {
+                        "basepath": "",
+                        "enable": false,
+                        "security": false
+                      },
+                      "prometheus": {
+                        "basepath": "",
+                        "enable": false,
+                        "security": false
+                      },
+                      "security": {
+                        "basepath": "",
+                        "enable": false,
+                        "secret": "",
+                        "users": null
+                      },
+                      "souin": {
+                        "basepath": "",
+                        "enable": true,
+                        "security": false
+                      }
+                    },
+                    "DefaultCache": {
+                      "allowed_additional_status_codes": null,
+                      "allowed_http_verbs": [],
+                      "badger": null,
+                      "cache_name": "",
+                      "cdn": {},
+                      "default_cache_control": "",
+                      "disable_coalescing": false,
+                      "distributed": false,
+                      "etcd": null,
+                      "headers": null,
+                      "key": {},
+                      "max_cacheable_body_bytes": 0,
+                      "mode": "",
+                      "nats": null,
+                      "nuts": null,
+                      "olric": null,
+                      "otter": null,
+                      "redis": null,
+                      "regex": {
+                        "exclude": ""
+                      },
+                      "simplefs": null,
+                      "stale": "0s",
+                      "storers": null,
+                      "timeout": {
+                        "backend": "0s",
+                        "cache": "0s"
+                      },
+                      "ttl": "0s"
+                    },
+                    "LogLevel": "",
+                    "SurrogateKeyDisabled": false,
+                    "SurrogateKeys": null,
+                    "URLs": null,
+                    "cache_keys": {}
+                  },
+                  "badger": null,
+                  "etcd": null,
+                  "handler": "cache",
+                  "key": {},
+                  "nats": null,
+                  "nuts": null,
+                  "olric": null,
+                  "otter": null,
+                  "redis": null,
+                  "simplefs": null,
+                  "stale": "0s",
+                  "timeout": {
+                    "backend": "0s",
+                    "cache": "0s"
+                  },
+                  "ttl": "0s"
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "app:8000"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "tls_connection_policies": [
+            {
+              "certificate_selection": {
+                "any_tag": [
+                  "cert0"
+                ]
+              }
+            }
+          ],
+          "automatic_https": {
+            "disable": true
+          },
+          "protocols": [
+            "h1"
+          ]
+        },
+        "srv1": {
+          "listen": [
             ":80"
           ],
           "routes": [
@@ -159,7 +273,7 @@
                   "handler": "reverse_proxy",
                   "upstreams": [
                     {
-                      "dial": "{env.UPSTREAM}"
+                      "dial": "app:8000"
                     }
                   ]
                 }
@@ -168,8 +282,27 @@
           ],
           "automatic_https": {
             "disable": true
-          }
+          },
+          "protocols": [
+            "h1"
+          ]
         }
+      }
+    },
+    "tls": {
+      "certificates": {
+        "load_files": [
+          {
+            "certificate": "/certs/cert.pem",
+            "key": "/certs/key.pem",
+            "tags": [
+              "cert0"
+            ]
+          }
+        ]
+      },
+      "session_tickets": {
+        "disabled": true
       }
     }
   }

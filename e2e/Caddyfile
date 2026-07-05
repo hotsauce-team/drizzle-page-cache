@@ -9,9 +9,21 @@
 		}
 	}
 	auto_https off
+	servers {
+		protocols h1
+	}
 }
 
 :80 {
+	cache
+	reverse_proxy app:8000
+}
+
+# TLS listener for the handshake-stress bench. Session tickets are disabled
+# in the generated JSON (gen-caddy-json.sh) so every connection pays a full
+# handshake — the Caddyfile cannot express that.
+:443 {
+	tls /certs/cert.pem /certs/key.pem
 	cache
 	reverse_proxy app:8000
 }

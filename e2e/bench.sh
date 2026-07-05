@@ -91,10 +91,10 @@ assert_uncached() {
 }
 
 bench_one() {
-  local target="$1" label="$2" path="$3"
-  local containers base
+  local target="$1" label="$2" path="$3" base="${4:-}"
+  local containers
   containers=$(containers_for "$target")
-  base=$(base_for "$target")
+  [ -z "$base" ] && base=$(base_for "$target")
 
   # Warm caches/JITs on the same path, outside the measured window.
   docker run --rm --network "$NET" \
@@ -109,6 +109,7 @@ bench_one() {
   docker run --rm --network "$NET" \
     -v "$PWD/bench:/scripts" -v "$PWD/$OUT:/out" \
     -e BASE_URL="$base" -e TARGET_PATH="$path" -e VUS="$VUS" -e DURATION="$DURATION" \
+    -e NO_REUSE="${NO_REUSE:-0}" -e GODEBUG=http2client=0 \
     grafana/k6 run --quiet --summary-export="/out/$label.json" /scripts/script.js \
     > "$OUT/$label.log" 2>&1
 
@@ -135,6 +136,12 @@ bench_one() {
     };
     const line = JSON.stringify(rec);
     console.log(line);
+    if ((rec.failed ?? 0) > 0.01) {
+      console.log(
+        `WARNING: ${target}: ${(rec.failed * 100).toFixed(1)}% of requests FAILED — ` +
+          `numbers above are not meaningful (rate limiting? see server logs)`,
+      );
+    }
     Deno.writeTextFileSync(`${out}/records.jsonl`, line + "\n", { append: true });
   ' "$OUT/$label.json" "$cpu_before" "$cpu_after" "$mem_before" "$mem_after" "$mem_peak" "$label" "$OUT"
 }
@@ -155,4 +162,11 @@ for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
   echo "== bench: $t uncached passthrough =="
   assert_uncached "$(base_for "$t")"
   bench_one "$t" "$t-uncached" /admin/uncached
+  # TLS handshake stress: fresh connection per request (NO_REUSE), full
+  # handshakes (all servers have session resumption disabled), HTTP/1.1
+  # pinned via GODEBUG=http2client=0 to avoid the ALPN/h2 confound.
+  # rps here = full ECDSA handshakes/second. Cache-hit path so the origin
+  # is never the bottleneck.
+  echo "== bench: $t TLS handshake stress =="
+  NO_REUSE=1 bench_one "$t" "$t-tls-hs" /post/3 "https://$t"
 done

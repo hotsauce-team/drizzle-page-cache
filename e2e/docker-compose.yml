@@ -74,6 +74,7 @@ services:
     volumes:
       - ./caddy.json:/etc/caddy/caddy.json:ro
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
     ports:
       - "127.0.0.1:8080:80"
     depends_on:
@@ -89,6 +90,7 @@ services:
       - UPSTREAM=app-node:8000
     volumes:
       - ./caddy.json:/etc/caddy/caddy.json:ro
+      - ./certs:/certs:ro
     ports:
       - "127.0.0.1:8081:80"
     depends_on:
@@ -120,6 +122,8 @@ services:
       context: .
       dockerfile: Dockerfile.ols
     shm_size: 256m # cache storagepath lives on /dev/shm (in-memory)
+    volumes:
+      - ./certs:/certs:ro
     ports:
       - "127.0.0.1:8083:80"
     depends_on:
@@ -133,6 +137,7 @@ services:
     shm_size: 256m
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/certs:ro
     ports:
       - "127.0.0.1:8084:80"
     depends_on:
@@ -144,6 +149,7 @@ services:
     shm_size: 256m
     volumes:
       - ./nginx/angie.conf:/etc/angie/angie.conf:ro
+      - ./certs:/certs:ro
     ports:
       - "127.0.0.1:8085:80"
     depends_on:
@@ -159,6 +165,7 @@ services:
       - UPSTREAM=app-bun:8000
     volumes:
       - ./caddy.json:/etc/caddy/caddy.json:ro
+      - ./certs:/certs:ro
     ports:
       - "127.0.0.1:8082:80"
     depends_on:

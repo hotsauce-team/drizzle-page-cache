@@ -137,6 +137,31 @@ nginx, Angie, and OLS are within ~2% on throughput — statistical parity — wi
 nginx cheapest per request and OLS close behind while being the only one of the
 three with native tag purging. Caddy trails at ~76% throughput and ~2× CPU.
 
+**TLS handshake stress** (`*-tls-hs`: fresh connection per request via k6
+`noConnectionReuse`, HTTP/1.1 pinned with `GODEBUG=http2client=0` to avoid the
+ALPN/h2 confound, one shared self-signed ECDSA P-256 cert everywhere
+(`gen-certs.sh`), session cache AND tickets disabled on every server so each
+connection pays a FULL handshake — verified with `openssl s_client`, 0% failed
+requests). rps = full handshakes/second:
+
+| target        | handshakes/s | p50 (ms) | CPU-ms/req | TLS library |
+| ------------- | ------------ | -------- | ---------- | ----------- |
+| OpenLiteSpeed | 6,151        | 0.27     | 0.238      | BoringSSL   |
+| Angie         | 4,642        | 0.36     | 0.396      | OpenSSL     |
+| nginx         | 4,593        | 0.37     | 0.396      | OpenSSL     |
+| Caddy         | 4,568        | 0.36     | 0.385      | Go          |
+
+BoringSSL (OLS) delivers ~34% more full handshakes/s at ~40% less CPU; Go and
+OpenSSL are effectively tied. Two findings from the bring-up: (1) **OLS ships
+TLS-handshake-flood protection ON by default** (~200 new SSL connections/s per
+client IP → "possible SSL negotiation based attack, block!") — excellent for the
+budget-VPS resilience story, fatal for a single-IP bench; lifted via
+`perClientConnLimit` (marked BENCH ONLY in the config). Its first "result" was
+99.7% silent failures, so `bench.sh` now prints a loud WARNING whenever a run's
+failure rate exceeds 1%. (2) A Docker-VM clock jump can poison k6's `rate` (a
+901 s "request" inside a 1 s iteration) — sanity-check `count/rate ≈ duration`
+when a number looks absurd.
+
 **Uncached passthrough** (`/admin/uncached`: same DB work, `no-store`, under the
 excluded prefix; `bench.sh` asserts the route isn't cached before measuring).
 Same run: direct app 11.4k req/s @ p50 0.49 ms · Caddy 12.3k @ 0.54 · OLS 11.0k
