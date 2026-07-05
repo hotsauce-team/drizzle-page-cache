@@ -2,3 +2,4 @@ node_modules/
 npm/
 .DS_Store
 deno.lock
+e2e/bench-results/

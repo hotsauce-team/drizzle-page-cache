@@ -102,6 +102,12 @@ public URL** (never the app directly — a purge header the proxy doesn't see
 purges nothing). Note OpenLiteSpeed batches purges internally, so eviction is
 eventually-consistent by a few seconds. Working OLS config in `e2e/ols/`.
 
+Is it fast? Run the local bench (`e2e/bench.sh`, k6 + cgroup CPU accounting over
+the e2e stack — numbers only comparable within one machine/run). On our
+reference run OLS served cache hits at higher throughput and roughly half the
+CPU of Caddy+Souin(otter), making it the strongest open-source tag-native option
+we've measured.
+
 ## Observability
 
 Quiet by default, except the two signals that can mean stale pages: **purge

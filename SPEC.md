@@ -114,6 +114,14 @@ Derived from the benchmarked configs in
 https://claude.ai/code/artifact/9f7db1ca-3954-4dec-9143-94f0dd478540 (HotSauce
 vs WordPress report: proxy throughput, purge modules, invalidation table).
 
+**Local bench harness** (`e2e/bench.sh`, local-only, not CI): k6 in Docker
+drives cache-hit traffic per target; CPU from cgroup v2 `usage_usec` deltas
+summed across proxy + app containers. Reference run (5 Jul 2026, Docker VM on
+Apple Silicon, 8 VUs × 30 s, ~150 B page — compare within one run only): direct
+app 10.7k req/s @ 0.095 CPU-ms · Caddy+Souin(otter) 36.8k @ 0.051 ·
+**OpenLiteSpeed 48.5k @ 0.028, p50 0.107 ms** — OLS was the fastest and cheapest
+cache in the harness.
+
 ## Upstream issues to file
 
 1. **drizzle-team/drizzle-orm**: RQB `_prepare` passes `queryMetadata: void 0`
