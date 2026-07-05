@@ -115,12 +115,30 @@ https://claude.ai/code/artifact/9f7db1ca-3954-4dec-9143-94f0dd478540 (HotSauce
 vs WordPress report: proxy throughput, purge modules, invalidation table).
 
 **Local bench harness** (`e2e/bench.sh`, local-only, not CI): k6 in Docker
-drives cache-hit traffic per target; CPU from cgroup v2 `usage_usec` deltas
-summed across proxy + app containers. Reference run (5 Jul 2026, Docker VM on
-Apple Silicon, 8 VUs × 30 s, ~150 B page — compare within one run only): direct
-app 10.7k req/s @ 0.095 CPU-ms · Caddy+Souin(otter) 36.8k @ 0.051 ·
-**OpenLiteSpeed 48.5k @ 0.028, p50 0.107 ms** — OLS was the fastest and cheapest
-cache in the harness.
+drives cache-hit traffic per target; CPU from cgroup v2 `usage_usec` deltas and
+peak memory (`memory.peak`) summed across proxy + app containers. Targets
+include bench-only nginx and Angie pairings (no tag purging), tuned for parity:
+all cores (`worker_processes auto` / OLS `httpdWorkers`), in-memory cache
+storage (tmpfs `/dev/shm` for nginx/angie/OLS; otter is in-memory by design),
+upstream keepalive, logs off where possible.
+
+Reference run (5 Jul 2026, Docker VM on Apple Silicon, 6 vCPU, 8 VUs × 30 s,
+~150 B page — compare within one run only):
+
+| target                | req/s | p50 (ms) | CPU-ms/req |
+| --------------------- | ----- | -------- | ---------- |
+| direct app (no cache) | 10.4k | 0.61     | 0.097      |
+| Caddy + Souin (otter) | 37.3k | 0.15     | 0.051      |
+| OpenLiteSpeed         | 48.3k | 0.11     | 0.028      |
+| nginx                 | 49.4k | 0.11     | 0.021      |
+| Angie                 | 48.2k | 0.10     | 0.024      |
+
+nginx, Angie, and OLS are within ~2% on throughput — statistical parity — with
+nginx cheapest per request and OLS close behind while being the only one of the
+three with native tag purging. Caddy trails at ~76% throughput and ~2× CPU.
+Memory sums carry a caveat: caddy/nginx/angie share the same `app` container
+(whose V8 heap grows across earlier runs), so cross-target memory comparison is
+indicative only.
 
 ## Upstream issues to file
 

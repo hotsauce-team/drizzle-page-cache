@@ -10,7 +10,15 @@
 #   ./bench.sh ols caddy    # specific targets
 #
 # Targets: app (no cache, baseline) | caddy (Souin+otter) | ols (OpenLiteSpeed)
-#          caddy-node | caddy-bun
+#          nginx | angie (bench-only: no tag purging) | caddy-node | caddy-bun
+#
+# Tuning parity (so the comparison is fair):
+#   nginx/angie  worker_processes auto, cache on /dev/shm (tmpfs), upstream
+#                keepalive, keepalive_requests 100000, logs off
+#   ols          httpdWorkers 6, storagepath on /dev/shm, access log kept
+#                (OLS has no clean off switch at server level)
+#   caddy        GOMAXPROCS=auto (all cores), otter is in-memory by design
+#   k6           keep-alive by default; same VUS/DURATION for every target
 set -euo pipefail
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
@@ -29,6 +37,8 @@ containers_for() {
     caddy-node) echo "$PREFIX-caddy-node-1 $PREFIX-app-node-1" ;;
     caddy-bun) echo "$PREFIX-caddy-bun-1 $PREFIX-app-bun-1" ;;
     ols) echo "$PREFIX-ols-1 $PREFIX-app-ols-1" ;;
+    nginx) echo "$PREFIX-nginx-1 $PREFIX-app-1" ;;
+    angie) echo "$PREFIX-angie-1 $PREFIX-app-1" ;;
     *) echo "unknown target: $1" >&2; exit 1 ;;
   esac
 }
@@ -58,6 +68,17 @@ mem_mb() {
   echo $((total / 1048576))
 }
 
+# Peak memory since container start (cgroup v2 memory.peak; falls back to
+# memory.current on kernels without it).
+mem_peak_mb() {
+  local total=0 c v
+  for c in $1; do
+    v=$(docker exec "$c" sh -c 'cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory.current')
+    total=$((total + v))
+  done
+  echo $((total / 1048576))
+}
+
 bench_one() {
   local target="$1"
   local containers base
@@ -81,9 +102,10 @@ bench_one() {
 
   cpu_after=$(cpu_usec "$containers")
   mem_after=$(mem_mb "$containers")
+  mem_peak=$(mem_peak_mb "$containers")
 
   deno eval '
-    const [path, cb, ca, mb, ma, target, out] = Deno.args;
+    const [path, cb, ca, mb, ma, mp, target, out] = Deno.args;
     const s = JSON.parse(Deno.readTextFileSync(path));
     const reqs = s.metrics.http_reqs.count;
     const dur = s.metrics.http_req_duration;
@@ -97,15 +119,16 @@ bench_one() {
       failed: s.metrics.http_req_failed?.value ?? null,
       mem_mb_before: Number(mb),
       mem_mb_after: Number(ma),
+      mem_mb_peak: Number(mp),
     };
     const line = JSON.stringify(rec);
     console.log(line);
     Deno.writeTextFileSync(`${out}/records.jsonl`, line + "\n", { append: true });
-  ' "$OUT/$target.json" "$cpu_before" "$cpu_after" "$mem_before" "$mem_after" "$target" "$OUT"
+  ' "$OUT/$target.json" "$cpu_before" "$cpu_after" "$mem_before" "$mem_after" "$mem_peak" "$target" "$OUT"
 }
 
-TARGETS=("${@:-app caddy ols}")
-[ $# -eq 0 ] && TARGETS=(app caddy ols)
+TARGETS=("${@:-app caddy ols nginx angie}")
+[ $# -eq 0 ] && TARGETS=(app caddy ols nginx angie)
 for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
   echo "== bench: $t (VUS=$VUS DURATION=$DURATION) =="
   bench_one "$t"
