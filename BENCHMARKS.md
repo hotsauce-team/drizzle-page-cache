@@ -165,14 +165,25 @@ an ECDSA signature (and see finding 4 for OLS's other answer to that attack).
    - setting `ignore_case: true` on the allowlist matcher **segfaults Envoy at
      startup** (exit 139) — a second bug.
 
-   Since runtimes add `Vary: Accept-Encoding` automatically when compressing
-   (Deno.serve does, unremovably), the filter is effectively non-functional for
-   HTML app caching. Every other cache in this matrix handled the same header
-   without configuration. Under load the "cache-hit" scenario equaled
-   passthrough (10.0k vs 11.9k req/s at the same CPU). Independently
-   disqualifying: the filter documents **no purge/invalidation mechanism
-   whatsoever**. Both bugs are upstream-issue-worthy; either way, not a
-   candidate.
+   Since runtimes add `Vary: Accept-Encoding` automatically (Deno.serve stamps
+   it unconditionally, even on responses it does not compress), the filter is
+   effectively non-functional for HTML app caching. Every other cache in this
+   matrix handled the same header without configuration. Under load the
+   "cache-hit" scenario equaled passthrough (10.0k vs 11.9k req/s at the same
+   CPU).
+
+   **No Envoy-side workaround exists**, and we tried the obvious one: strip
+   `accept-encoding` from upstream requests and drop the (then-vestigial) `vary`
+   from responses via route-level
+   `request_headers_to_remove`/`response_headers_to_remove`. Neither mutation
+   had any observable effect with the cache filter in the chain — consistent
+   with the filter's own trace output (`cache/upstream_request.cc`): **the cache
+   filter performs its own upstream fetch, bypassing the router filter**, where
+   route-level header mutations are applied.
+
+   Independently disqualifying: the filter documents **no purge/invalidation
+   mechanism whatsoever**. The bugs (vary allowlist ineffective, `ignore_case`
+   segfault) are upstream-issue-worthy; either way, not a candidate.
 
 ## Conclusions
 
