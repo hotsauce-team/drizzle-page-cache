@@ -18,6 +18,10 @@ static_resources:
                 codec_type: HTTP1
                 route_config:
                   name: local
+                  # NOTE: route-level request/response header mutations do
+                  # NOT affect the cache filter — it performs its own
+                  # upstream fetch, bypassing the router. See BENCHMARKS.md
+                  # finding 6.
                   virtual_hosts:
                     - name: app
                       domains: ["*"]
