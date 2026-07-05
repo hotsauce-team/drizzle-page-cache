@@ -65,6 +65,27 @@ export function angiePurger(
   };
 }
 
+/**
+ * LiteSpeed / OpenLiteSpeed: purging is header-driven — the backend response
+ * must carry `X-LiteSpeed-Purge` while flowing THROUGH the proxy. This purger
+ * fetches the middleware's purge-echo route (see `purgeEcho` option) via the
+ * proxy's public URL; the echoed header performs the purge.
+ *
+ * `echoUrl` MUST point at the proxy (e.g. `http://ols/__drizzle-page-cache/purge`),
+ * never directly at the app — a purge header the proxy never sees purges nothing.
+ */
+export function litespeedPurger(echoUrl: string, token: string): Purger {
+  return {
+    async purge(tags) {
+      const url = new URL(echoUrl);
+      url.searchParams.set("token", token);
+      url.searchParams.set("tags", tags.join(","));
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`litespeed purge echo: ${res.status}`);
+    },
+  };
+}
+
 /** POSTs `{ tags: [...] }` as JSON — for custom CDNs and queues. */
 export function webhookPurger(url: string, init?: RequestInit): Purger {
   return {

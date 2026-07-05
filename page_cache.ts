@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { analyzeSchema } from "./derive.ts";
+import { analyzeSchema, WILDCARD } from "./derive.ts";
 import { type FacadeContext, wrapDb } from "./facade.ts";
 import type {
   Handler,
@@ -10,12 +10,21 @@ import type {
 
 export function createPageCache(options: PageCacheOptions): PageCache {
   const header = options.header ?? "Surrogate-Key";
+  const separator = options.headerSeparator ?? " ";
   const ttl = options.ttl ?? 3600;
   const swr = options.staleWhileRevalidate ?? 30;
   const settleMs = options.settleMs ?? 50;
   const exclude = options.exclude ?? ["/admin"];
   const prefix = options.tagPrefix ?? "";
+  const wildcardTag = options.wildcardTag ?? WILDCARD;
   const maxHeaderBytes = options.maxHeaderBytes ?? 7900;
+  const echo = options.purgeEcho === undefined ? undefined : {
+    token: options.purgeEcho.token,
+    path: options.purgeEcho.path ?? "/__drizzle-page-cache/purge",
+    header: options.purgeEcho.header ?? "X-LiteSpeed-Purge",
+    value: options.purgeEcho.value ??
+      ((tags: readonly string[]) => tags.map((t) => `tag=${t}`).join(", ")),
+  };
   const shouldTag = options.shouldTag ??
     ((req: Request, res: Response) => {
       if (req.method !== "GET" || !res.ok) return false;
@@ -48,7 +57,8 @@ export function createPageCache(options: PageCacheOptions): PageCache {
 
   const info = analyzeSchema(options.schema);
   const scope = new AsyncLocalStorage<Set<string>>();
-  const withPrefix = (tag: string): string => prefix + tag;
+  const withPrefix = (tag: string): string =>
+    prefix + (tag === WILDCARD ? wildcardTag : tag);
 
   // -- purge queue: dedupe + settle; flush() for tests/shutdown ---------------
   let pending = new Set<string>();
@@ -113,6 +123,25 @@ export function createPageCache(options: PageCacheOptions): PageCache {
 
     middleware(handler: Handler): Handler {
       return async (req) => {
+        // Purge-echo route: the purge header must flow THROUGH the proxy
+        // (LiteSpeed-style header-driven purging). Never cached.
+        if (echo !== undefined) {
+          const url = new URL(req.url);
+          if (url.pathname === echo.path) {
+            if (url.searchParams.get("token") !== echo.token) {
+              return new Response("forbidden", { status: 403 });
+            }
+            const tags = (url.searchParams.get("tags") ?? "")
+              .split(",").map((t) => t.trim()).filter((t) => t !== "");
+            const headers = new Headers({
+              "Cache-Control": "no-store",
+              "X-LiteSpeed-Cache-Control": "no-cache",
+            });
+            if (tags.length > 0) headers.set(echo.header, echo.value(tags));
+            return new Response("purged", { headers });
+          }
+        }
+
         const tags = new Set<string>();
         const res = await scope.run(tags, async () => await handler(req));
         if (tags.size === 0) return res;
@@ -125,7 +154,7 @@ export function createPageCache(options: PageCacheOptions): PageCache {
           out.headers.set("X-Cache-Tags", [...tags].join(" "));
         }
         if (cacheable) {
-          let value = [...tags].join(" ");
+          let value = [...tags].join(separator);
           if (value.length > maxHeaderBytes) {
             const collapsed = collapse(tags);
             emit({
@@ -133,13 +162,16 @@ export function createPageCache(options: PageCacheOptions): PageCache {
               count: tags.size,
               path: new URL(req.url).pathname,
             });
-            value = collapsed.join(" ");
+            value = collapsed.join(separator);
           }
           out.headers.set(header, value);
           out.headers.set(
             "Cache-Control",
             `max-age=0, s-maxage=${ttl}, stale-while-revalidate=${swr}`,
           );
+          for (const [k, v] of Object.entries(options.cacheHeaders ?? {})) {
+            out.headers.set(k, v);
+          }
         }
         return out;
       };

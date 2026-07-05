@@ -1,0 +1,7 @@
+# OpenLiteSpeed (GPLv3) with a minimal proxy + backend-driven LSCache config.
+FROM litespeedtech/openlitespeed:latest
+COPY ols/httpd_config.conf /usr/local/lsws/conf/httpd_config.conf
+COPY ols/vhconf.conf /usr/local/lsws/conf/vhosts/demo/vhconf.conf
+RUN mkdir -p /var/www/vhosts/demo /tmp/lscache \
+  && chown -R nobody:nogroup /tmp/lscache \
+  && chown -R lsadm:lsadm /usr/local/lsws/conf/

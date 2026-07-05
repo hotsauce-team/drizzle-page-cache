@@ -35,8 +35,35 @@ export interface PageCacheOptions {
   ttl?: number;
   /** `stale-while-revalidate` in seconds. Default 30. */
   staleWhileRevalidate?: number;
-  /** Response header carrying the tags. Default 'Surrogate-Key'. */
+  /** Response header carrying the tags. Default 'Surrogate-Key'.
+   * LiteSpeed/OpenLiteSpeed: 'X-LiteSpeed-Tag'. */
   header?: string;
+  /** Separator between tags in the header. Default ' ' (Surrogate-Key style).
+   * LiteSpeed expects ','. */
+  headerSeparator?: string;
+  /** Extra headers set verbatim on cacheable responses, e.g. LiteSpeed's
+   * `{ 'X-LiteSpeed-Cache-Control': 'public, max-age=300' }`. */
+  cacheHeaders?: Record<string, string>;
+  /** Replacement for the `*` wildcard tag on both responses and purges.
+   * REQUIRED for LiteSpeed: a literal `X-LiteSpeed-Purge: *` flushes the
+   * entire cache, so map the unknown-bucket to e.g. 'dpc-wild'. */
+  wildcardTag?: string;
+  /**
+   * Serve a purge-echo route from the middleware, for servers that purge via
+   * response headers flowing THROUGH the proxy (LiteSpeed/OpenLiteSpeed)
+   * instead of a purge endpoint. The matching `litespeedPurger` fetches this
+   * route via the proxy; the response carries the purge header.
+   */
+  purgeEcho?: {
+    /** Shared secret; requests without it get 403. */
+    token: string;
+    /** Route path. Default '/__drizzle-page-cache/purge'. */
+    path?: string;
+    /** Purge header name. Default 'X-LiteSpeed-Purge'. */
+    header?: string;
+    /** Header value builder. Default: tags → `tag=a, tag=b`. */
+    value?: (tags: readonly string[]) => string;
+  };
   /** Path prefixes never tagged/cached. Default ['/admin']. */
   exclude?: string[];
   /** Full override of the cacheability predicate. */

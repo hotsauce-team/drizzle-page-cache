@@ -104,7 +104,13 @@ Bun has **no `node:sqlite`** (verified 1.3.14) — the split into `db-node.ts` /
 `db-bun.ts` exists solely for that; the package itself is untouched. Loop:
 render → HIT → write → purge → MISS with fresh body —
 `./verify.sh caddy && ./verify.sh caddy-node && ./verify.sh caddy-bun`, all
-three verified passing 5 Jul 2026. Derived from the benchmarked configs in
+three verified passing 5 Jul 2026. Fourth pairing: **OpenLiteSpeed** (GPLv3,
+`e2e/ols/` config: backend-driven caching via `enableCache 0` +
+`checkPublicCache 1`) with the same Deno app in litespeed mode
+(`X-LiteSpeed-Tag`, comma separator, `X-LiteSpeed-Cache-Control`, `wildcardTag`
+rename, purge-echo route + `litespeedPurger`) — `./verify.sh ols` passing 5 Jul
+2026, including tag-purge of query-string variants and colon-containing tags.
+Derived from the benchmarked configs in
 https://claude.ai/code/artifact/9f7db1ca-3954-4dec-9143-94f0dd478540 (HotSauce
 vs WordPress report: proxy throughput, purge modules, invalidation table).
 

@@ -95,6 +95,36 @@ services:
       app-node:
         condition: service_healthy
 
+  # Same app again for the OpenLiteSpeed pairing (header-driven purging).
+  app-ols:
+    image: denoland/deno:alpine
+    working_dir: /repo
+    volumes:
+      - ../:/repo:ro
+    environment:
+      - PURGE_STYLE=litespeed
+      - PURGE_URL=http://ols/__drizzle-page-cache/purge
+      - PURGE_TOKEN=e2e-secret
+    command: deno run --allow-net --allow-env /repo/e2e/app/server.ts
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1:8000/ || exit 1",
+      ]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  ols:
+    build:
+      context: .
+      dockerfile: Dockerfile.ols
+    ports:
+      - "127.0.0.1:8083:80"
+    depends_on:
+      app-ols:
+        condition: service_healthy
+
   caddy-bun:
     build:
       context: .

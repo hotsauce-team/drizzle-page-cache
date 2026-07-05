@@ -7,7 +7,7 @@ import process from "node:process";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { createPageCache, souinPurger } from "../../mod.ts";
+import { createPageCache, litespeedPurger, souinPurger } from "../../mod.ts";
 import type { Handler } from "../../types.ts";
 
 export const posts = sqliteTable("posts", {
@@ -32,13 +32,29 @@ export type SqliteExec = (
 ) => Promise<{ rows: unknown[] }>;
 
 export function createHandler(exec: SqliteExec): Handler {
+  // PURGE_STYLE=litespeed switches to header-driven purging via the
+  // purge-echo route (OpenLiteSpeed); default is the Souin PURGE API.
+  const litespeed = process.env.PURGE_STYLE === "litespeed";
+  const token = process.env.PURGE_TOKEN ?? "e2e-secret";
+  const purgeUrl = process.env.PURGE_URL ??
+    (litespeed
+      ? "http://ols/__drizzle-page-cache/purge"
+      : "http://caddy/souin-api/souin");
+
   const pageCache = createPageCache({
     schema,
     ttl: 300,
     settleMs: 10,
-    purge: souinPurger(
-      process.env.PURGE_URL ?? "http://caddy/souin-api/souin",
-    ),
+    purge: litespeed ? litespeedPurger(purgeUrl, token) : souinPurger(purgeUrl),
+    ...(litespeed
+      ? {
+        header: "X-LiteSpeed-Tag",
+        headerSeparator: ",",
+        cacheHeaders: { "X-LiteSpeed-Cache-Control": "public, max-age=300" },
+        wildcardTag: "dpc-wild",
+        purgeEcho: { token },
+      }
+      : {}),
   });
 
   const db = pageCache.wrap(drizzle(exec, { schema }));

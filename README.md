@@ -75,7 +75,32 @@ pageCache.purgeTags("posts"); // trigger a purge manually
 
 Built in: `souinPurger` (Caddy cache-handler), `varnishPurger` (xkey),
 `angiePurger` (tag → URL-pattern wildcard PURGE for nginx-family proxies),
-`webhookPurger`. Or implement `Purger` (one method) for your CDN.
+`litespeedPurger` (see below), `webhookPurger`. Or implement `Purger` (one
+method) for your CDN.
+
+### LiteSpeed / OpenLiteSpeed
+
+OpenLiteSpeed (GPLv3) has native tag support, but purging is **header-driven**:
+the purge instruction must ride a backend response _through_ the proxy rather
+than hit a purge endpoint. Three options cover it:
+
+```ts
+createPageCache({
+  schema,
+  purge: litespeedPurger("http://your-site/__drizzle-page-cache/purge", token),
+  header: "X-LiteSpeed-Tag",
+  headerSeparator: ",",
+  cacheHeaders: { "X-LiteSpeed-Cache-Control": "public, max-age=300" },
+  wildcardTag: "dpc-wild", // REQUIRED: a literal `*` purge flushes EVERYTHING
+  purgeEcho: { token }, // middleware serves the purge-echo route
+});
+```
+
+`purgeEcho` makes the middleware serve a token-guarded route whose response
+carries `X-LiteSpeed-Purge`; `litespeedPurger` fetches it **via the proxy's
+public URL** (never the app directly — a purge header the proxy doesn't see
+purges nothing). Note OpenLiteSpeed batches purges internally, so eviction is
+eventually-consistent by a few seconds. Working OLS config in `e2e/ols/`.
 
 ## Observability
 
