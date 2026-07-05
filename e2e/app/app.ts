@@ -84,6 +84,16 @@ export function createHandler(exec: SqliteExec): Handler {
         ? html(`<h1>${post.title}</h1>`)
         : new Response("not found", { status: 404 });
     }
+    // Bench route: same work as a detail page, never cacheable — lives under
+    // the excluded /admin prefix (middleware adds no cache headers there) and
+    // sends no-store explicitly, so every proxy passes it through. Measures
+    // pure proxy passthrough overhead on cache misses.
+    if (url.pathname === "/admin/uncached") {
+      const [post] = await db.select().from(posts).where(eq(posts.id, 3));
+      const res = html(`<h1>${post?.title ?? "?"}</h1>`);
+      res.headers.set("Cache-Control", "no-store");
+      return res;
+    }
     if (edit && req.method === "POST") {
       const title = (await req.formData()).get("title") as string ?? "edited";
       await db.update(posts).set({ title }).where(

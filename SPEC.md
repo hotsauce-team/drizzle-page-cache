@@ -136,11 +136,24 @@ Reference run (5 Jul 2026, Docker VM on Apple Silicon, 6 vCPU, 8 VUs × 30 s,
 nginx, Angie, and OLS are within ~2% on throughput — statistical parity — with
 nginx cheapest per request and OLS close behind while being the only one of the
 three with native tag purging. Caddy trails at ~76% throughput and ~2× CPU.
-Memory sums carry a caveat: caddy/nginx/angie share the same `app` container
-(whose V8 heap grows across earlier runs), so cross-target memory comparison is
-indicative only. Measured proxy-only idle memory (cgroup `memory.current`, 30 s
-after one warmed request): **OpenLiteSpeed 34 MB** with `httpdWorkers 6`; from
-the earlier report's harness: nginx ~16 MB, Angie/Caddy ~21 MB, Varnish ~107 MB.
+
+**Uncached passthrough** (`/admin/uncached`: same DB work, `no-store`, under the
+excluded prefix; `bench.sh` asserts the route isn't cached before measuring).
+Same run: direct app 11.4k req/s @ p50 0.49 ms · Caddy 12.3k @ 0.54 · OLS 11.0k
+@ 0.59 · nginx 13.1k @ 0.50 · Angie 12.0k @ 0.51 — **every proxy is at
+direct-app parity within run variance** (the app render is the bottleneck); OLS
+adds ~0.1 ms p50, indistinguishable from the rest. The "OLS is slow at uncached"
+claim did not reproduce. One real finding: with a single cached `location`,
+**nginx/Angie `proxy_cache_lock` + a no-store response stalls waiting requests
+for `proxy_cache_lock_timeout` (5 s default)** — measured as 2.6k req/s with p50
+0.29 ms but max 5008 ms before the fix. Idiomatic fix (applied to the configs):
+a cache-free `location` for known-uncacheable prefixes. OLS and Caddy/Souin
+handle uncacheable responses gracefully without config help. Memory sums carry a
+caveat: caddy/nginx/angie share the same `app` container (whose V8 heap grows
+across earlier runs), so cross-target memory comparison is indicative only.
+Measured proxy-only idle memory (cgroup `memory.current`, 30 s after one warmed
+request): **OpenLiteSpeed 34 MB** with `httpdWorkers 6`; from the earlier
+report's harness: nginx ~16 MB, Angie/Caddy ~21 MB, Varnish ~107 MB.
 
 ## Upstream issues to file
 

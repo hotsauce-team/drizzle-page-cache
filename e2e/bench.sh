@@ -79,15 +79,27 @@ mem_peak_mb() {
   echo $((total / 1048576))
 }
 
+# Assert the uncached route really bypasses the cache on this target.
+assert_uncached() {
+  local base="$1" h
+  h=$(docker run --rm --network "$NET" curlimages/curl:latest -s -D - -o /dev/null "$base/admin/uncached"
+      docker run --rm --network "$NET" curlimages/curl:latest -s -D - -o /dev/null "$base/admin/uncached")
+  if echo "$h" | grep -qiE '^(cache-status:.*; hit|x-cache-status: HIT|x-litespeed-cache: hit)'; then
+    echo "FATAL: /admin/uncached is being cached on $base — results would be meaningless" >&2
+    exit 1
+  fi
+}
+
 bench_one() {
-  local target="$1"
+  local target="$1" label="$2" path="$3"
   local containers base
   containers=$(containers_for "$target")
   base=$(base_for "$target")
 
-  # Warm the cache (and JITs) outside the measured window.
+  # Warm caches/JITs on the same path, outside the measured window.
   docker run --rm --network "$NET" \
-    -v "$PWD/bench:/scripts" -e BASE_URL="$base" -e VUS=4 -e DURATION=10s \
+    -v "$PWD/bench:/scripts" -e BASE_URL="$base" -e TARGET_PATH="$path" \
+    -e VUS=4 -e DURATION=10s \
     grafana/k6 run --quiet /scripts/script.js > /dev/null 2>&1
 
   local mem_before cpu_before cpu_after mem_after
@@ -96,9 +108,9 @@ bench_one() {
 
   docker run --rm --network "$NET" \
     -v "$PWD/bench:/scripts" -v "$PWD/$OUT:/out" \
-    -e BASE_URL="$base" -e VUS="$VUS" -e DURATION="$DURATION" \
-    grafana/k6 run --quiet --summary-export="/out/$target.json" /scripts/script.js \
-    > "$OUT/$target.log" 2>&1
+    -e BASE_URL="$base" -e TARGET_PATH="$path" -e VUS="$VUS" -e DURATION="$DURATION" \
+    grafana/k6 run --quiet --summary-export="/out/$label.json" /scripts/script.js \
+    > "$OUT/$label.log" 2>&1
 
   cpu_after=$(cpu_usec "$containers")
   mem_after=$(mem_mb "$containers")
@@ -124,12 +136,23 @@ bench_one() {
     const line = JSON.stringify(rec);
     console.log(line);
     Deno.writeTextFileSync(`${out}/records.jsonl`, line + "\n", { append: true });
-  ' "$OUT/$target.json" "$cpu_before" "$cpu_after" "$mem_before" "$mem_after" "$mem_peak" "$target" "$OUT"
+  ' "$OUT/$label.json" "$cpu_before" "$cpu_after" "$mem_before" "$mem_after" "$mem_peak" "$label" "$OUT"
 }
 
 TARGETS=("${@:-app caddy ols nginx angie}")
 [ $# -eq 0 ] && TARGETS=(app caddy ols nginx angie)
 for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
-  echo "== bench: $t (VUS=$VUS DURATION=$DURATION) =="
-  bench_one "$t"
+  if [ "$t" = "app" ]; then
+    # Direct app = the no-proxy baseline for both scenarios.
+    echo "== bench: app cache-hit path (VUS=$VUS DURATION=$DURATION) =="
+    bench_one app app /post/3
+    echo "== bench: app uncached path =="
+    bench_one app app-uncached /admin/uncached
+    continue
+  fi
+  echo "== bench: $t cache hits (VUS=$VUS DURATION=$DURATION) =="
+  bench_one "$t" "$t" /post/3
+  echo "== bench: $t uncached passthrough =="
+  assert_uncached "$(base_for "$t")"
+  bench_one "$t" "$t-uncached" /admin/uncached
 done
