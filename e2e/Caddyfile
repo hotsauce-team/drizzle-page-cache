@@ -1,0 +1,17 @@
+{
+	order cache before rewrite
+	cache {
+		ttl 300s
+		otter
+		storers otter
+		api {
+			souin
+		}
+	}
+	auto_https off
+}
+
+:80 {
+	cache
+	reverse_proxy app:8000
+}

@@ -1,0 +1,10 @@
+# NOTE: darkweak/souin/plugins/caddy, NOT caddyserver/cache-handler — the
+# cache-handler module lags upstream and has broken surrogate-key purging
+# (https://caddy.community/t/-/30857). Verified during e2e bring-up.
+FROM caddy:builder AS builder
+RUN xcaddy build \
+  --with github.com/darkweak/souin/plugins/caddy \
+  --with github.com/darkweak/storages/otter/caddy
+
+FROM caddy:latest
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy

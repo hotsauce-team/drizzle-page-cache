@@ -1,0 +1,176 @@
+{
+  "apps": {
+    "cache": {
+      "allowed_http_verbs": [],
+      "allowed_additional_status_codes": null,
+      "badger": null,
+      "cache_name": "",
+      "cdn": {},
+      "default_cache_control": "",
+      "max_cacheable_body_bytes": 0,
+      "distributed": false,
+      "headers": [],
+      "key": {},
+      "mode": "",
+      "olric": null,
+      "redis": null,
+      "etcd": null,
+      "nats": null,
+      "nuts": null,
+      "otter": {
+        "Uuid": "",
+        "found": true,
+        "url": "",
+        "path": "",
+        "configuration": null
+      },
+      "regex": {
+        "exclude": ""
+      },
+      "storers": [
+        "otter"
+      ],
+      "timeout": {
+        "backend": "0s",
+        "cache": "0s"
+      },
+      "ttl": "5m0s",
+      "simplefs": null,
+      "stale": "0s",
+      "disable_coalescing": false,
+      "Storers": null,
+      "SurrogateStorage": null,
+      "SurrogateKeyDisabled": false,
+      "api": {
+        "basepath": "",
+        "debug": {
+          "basepath": "",
+          "enable": false,
+          "security": false
+        },
+        "prometheus": {
+          "basepath": "",
+          "enable": false,
+          "security": false
+        },
+        "souin": {
+          "basepath": "",
+          "enable": true,
+          "security": false
+        },
+        "security": {
+          "basepath": "",
+          "enable": false,
+          "secret": "",
+          "users": null
+        }
+      }
+    },
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [
+            ":80"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "Configuration": {
+                    "API": {
+                      "basepath": "",
+                      "debug": {
+                        "basepath": "",
+                        "enable": false,
+                        "security": false
+                      },
+                      "prometheus": {
+                        "basepath": "",
+                        "enable": false,
+                        "security": false
+                      },
+                      "security": {
+                        "basepath": "",
+                        "enable": false,
+                        "secret": "",
+                        "users": null
+                      },
+                      "souin": {
+                        "basepath": "",
+                        "enable": true,
+                        "security": false
+                      }
+                    },
+                    "DefaultCache": {
+                      "allowed_additional_status_codes": null,
+                      "allowed_http_verbs": [],
+                      "badger": null,
+                      "cache_name": "",
+                      "cdn": {},
+                      "default_cache_control": "",
+                      "disable_coalescing": false,
+                      "distributed": false,
+                      "etcd": null,
+                      "headers": null,
+                      "key": {},
+                      "max_cacheable_body_bytes": 0,
+                      "mode": "",
+                      "nats": null,
+                      "nuts": null,
+                      "olric": null,
+                      "otter": null,
+                      "redis": null,
+                      "regex": {
+                        "exclude": ""
+                      },
+                      "simplefs": null,
+                      "stale": "0s",
+                      "storers": null,
+                      "timeout": {
+                        "backend": "0s",
+                        "cache": "0s"
+                      },
+                      "ttl": "0s"
+                    },
+                    "LogLevel": "",
+                    "SurrogateKeyDisabled": false,
+                    "SurrogateKeys": null,
+                    "URLs": null,
+                    "cache_keys": {}
+                  },
+                  "badger": null,
+                  "etcd": null,
+                  "handler": "cache",
+                  "key": {},
+                  "nats": null,
+                  "nuts": null,
+                  "olric": null,
+                  "otter": null,
+                  "redis": null,
+                  "simplefs": null,
+                  "stale": "0s",
+                  "timeout": {
+                    "backend": "0s",
+                    "cache": "0s"
+                  },
+                  "ttl": "0s"
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "app:8000"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "automatic_https": {
+            "disable": true
+          }
+        }
+      }
+    }
+  }
+}

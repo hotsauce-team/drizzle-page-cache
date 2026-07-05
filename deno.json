@@ -1,0 +1,27 @@
+{
+  "name": "@hotsauce/drizzle-page-cache",
+  "version": "0.1.0",
+  "exports": "./mod.ts",
+  "license": "MIT",
+
+  "tasks": {
+    "test": "deno test --allow-env --allow-read tests/",
+    "check": "deno check mod.ts tests/",
+    "build:npm": "deno run -A scripts/build_npm.ts"
+  },
+
+  "imports": {
+    "drizzle-orm": "npm:drizzle-orm@^0.45.1",
+    "@std/assert": "jsr:@std/assert@^1.0.6",
+    "@deno/dnt": "jsr:@deno/dnt@^0.42.1"
+  },
+
+  "publish": {
+    "include": ["mod.ts", "*.ts", "README.md", "LICENSE"],
+    "exclude": ["tests/", "e2e/", "scripts/"]
+  },
+
+  "compilerOptions": {
+    "strict": true
+  }
+}

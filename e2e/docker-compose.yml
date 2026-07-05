@@ -1,0 +1,34 @@
+name: drizzle-page-cache-e2e
+
+services:
+  app:
+    image: denoland/deno:alpine
+    working_dir: /repo
+    volumes:
+      - ../:/repo:ro
+    command: deno run --allow-net --allow-env /repo/e2e/app/server.ts
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1:8000/ || exit 1",
+      ]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    # Runs on caddy.json (generated from the Caddyfile, then patched): souin's
+    # FromApp never copies the global `api` block into the handler config, so
+    # the Souin API cannot be enabled from a Caddyfile. See SPEC.md.
+    command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]
+    volumes:
+      - ./caddy.json:/etc/caddy/caddy.json:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      app:
+        condition: service_healthy
