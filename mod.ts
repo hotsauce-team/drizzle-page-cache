@@ -16,4 +16,10 @@ export {
   webhookPurger,
 } from "./purgers.ts";
 export { WILDCARD } from "./derive.ts";
-export type { Handler, PageCache, PageCacheOptions, Purger } from "./types.ts";
+export type {
+  Handler,
+  PageCache,
+  PageCacheEvent,
+  PageCacheOptions,
+  Purger,
+} from "./types.ts";

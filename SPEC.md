@@ -58,6 +58,23 @@ Deno/Node/Bun (Workers via `nodejs_compat`).
   on rollback (purging pre-commit lets the proxy cache pre-commit data).
   Failures are logged; the TTL is the backstop (no retry queue in v0.x).
 - **Escape hatches**: `tag(...tags)` and `purgeTags(...tags)`.
+- **Observability** (`onEvent`, structured `PageCacheEvent`): quiet by default
+  except `purge-error` (console.error) and `unobserved-write` (console.warn) —
+  the two staleness-risk signals. `wildcard-tag` is deduplicated by reason
+  (over-purging is safe; the event is developer feedback, not an alarm).
+  `header-overflow` collapses row tags to table tags (safe direction) rather
+  than truncating (unsafe). `debug: true` exposes `X-Cache-Tags` on all
+  responses for local staleness debugging — never production. Drizzle's own
+  `Logger` was considered and rejected as the channel: wrong interface
+  (`logQuery(sql, params)` only) and reaching the configured instance requires
+  internals access.
+- **Namespacing** (`tagPrefix`, static string): applied verbatim to every tag
+  (derived, manual, wildcard) and every purge at the two choke points, so reads
+  and purges always agree. Solves cross-app collisions behind a shared
+  cache/CDN. Shared-table multi-tenancy needs no prefix (row tags globally
+  unique; cross-tenant table purges only over-purge). Dynamic per-request
+  prefixes deliberately deferred — writes have no request context outside the
+  ALS scope, so a correct implementation needs design work.
 
 ## Out of scope (v0.x)
 

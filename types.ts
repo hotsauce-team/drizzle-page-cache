@@ -6,6 +6,27 @@ export interface Purger {
 
 export type Handler = (req: Request) => Promise<Response> | Response;
 
+/**
+ * Structured observability events. Silent by default except:
+ * `purge-error` (console.error) and `unobserved-write` (console.warn) — the
+ * two that can mean stale pages. Supplying `onEvent` takes over ALL events.
+ */
+export type PageCacheEvent =
+  /** A read was opaque to the facade → wildcard tag (over-purging, safe).
+   * Deduplicated by `reason` for the lifetime of the instance. */
+  | { kind: "wildcard-tag"; reason: string }
+  /** A write was opaque to the facade → its purge only reaches the wildcard
+   * bucket, so properly-tagged pages may go stale until TTL. The dangerous
+   * direction — fix with `purgeTags()` or a recognizable statement. */
+  | { kind: "unobserved-write"; reason: string }
+  /** A purge batch was handed to the purger (debug-level). */
+  | { kind: "purge-batch"; tags: readonly string[] }
+  /** The purger threw; the TTL is now the only backstop. */
+  | { kind: "purge-error"; tags: readonly string[]; error: unknown }
+  /** A response's tag set exceeded `maxHeaderBytes` and row tags were
+   * collapsed to table tags (over-tagging, safe). */
+  | { kind: "header-overflow"; count: number; path: string };
+
 export interface PageCacheOptions {
   /** Your drizzle schema — source of table names, PKs, and relations. */
   schema: Record<string, unknown>;
@@ -22,8 +43,25 @@ export interface PageCacheOptions {
   shouldTag?: (req: Request, res: Response) => boolean;
   /** Debounce window for purge batching, ms. Default 50. */
   settleMs?: number;
-  /** Called when a purge batch fails. Default: console.error. TTL is the backstop. */
-  onPurgeError?: (error: unknown, tags: readonly string[]) => void;
+  /**
+   * Prefix applied verbatim to every tag — derived, manual, wildcard — and to
+   * every purge, so reads and purges always agree. Use it to namespace
+   * multiple apps/drizzle instances sharing one cache (e.g. `'shop_'` →
+   * `shop_posts:7`). Prefer a non-`:` separator so purger table-mapping
+   * fallbacks keep working. Shared-table multi-tenancy usually does NOT need
+   * this: row tags are already globally unique; table-tag purges cross
+   * tenants, which only over-purges (safe).
+   */
+  tagPrefix?: string;
+  /** Observability hook — see {@link PageCacheEvent}. Replaces the default
+   * console logging for purge-error / unobserved-write when supplied. */
+  onEvent?: (event: PageCacheEvent) => void;
+  /** Collapse row tags to table tags when the header would exceed this many
+   * bytes (some proxies reject large headers). Default 7900. */
+  maxHeaderBytes?: number;
+  /** Dev only: also expose tags as `X-Cache-Tags` on every response that has
+   * them (including excluded paths). Leaks schema names — never in prod. */
+  debug?: boolean;
 }
 
 export interface PageCache {

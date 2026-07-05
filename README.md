@@ -77,6 +77,50 @@ Built in: `souinPurger` (Caddy cache-handler), `varnishPurger` (xkey),
 `angiePurger` (tag → URL-pattern wildcard PURGE for nginx-family proxies),
 `webhookPurger`. Or implement `Purger` (one method) for your CDN.
 
+## Observability
+
+Quiet by default, except the two signals that can mean stale pages: **purge
+failures** (`console.error` — your purge endpoint is down, TTL is now the only
+backstop) and **unobserved writes** (`console.warn` — a write the facade
+couldn't attribute to a table, so tagged pages won't be purged by it).
+
+For everything else, supply `onEvent` (it then receives ALL events and the
+default logging is disabled):
+
+```ts
+onEvent: (e) => {
+  // 'wildcard-tag'      a read was opaque → over-purging (safe); deduped by reason
+  // 'unobserved-write'  a write was opaque → possible staleness (fix these)
+  // 'purge-batch'       what was purged, when — debugging gold
+  // 'purge-error'       purger threw
+  // 'header-overflow'   row tags collapsed to table tags (safe)
+  logger.info(e);
+},
+```
+
+**Debugging staleness locally**: set `debug: true` to expose the computed tags
+as `X-Cache-Tags` on every response (including uncacheable/excluded paths), and
+log `purge-batch` — together they answer "why did(n't) this page refresh." Never
+enable `debug` in production; it leaks schema names.
+
+## Namespacing (`tagPrefix`)
+
+Running several apps or drizzle instances behind one shared cache/CDN? Without
+namespacing, both apps tagging `posts` would purge each other's pages. A prefix
+is applied to every tag — derived, manual, and the `*` wildcard bucket — and to
+every purge, so reads and purges always agree:
+
+```ts
+createPageCache({ schema, purge, tagPrefix: "shop_" });
+// → Surrogate-Key: shop_posts:7 shop_users   · purges: shop_posts:7 shop_posts
+```
+
+Prefer a non-`:` separator (like `shop_`) so tag→table mapping in purgers keeps
+working. Note: shared-table multi-tenancy usually needs **no** prefix — row tags
+are already globally unique, and table-tag purges crossing tenants only
+over-purge, which is the safe direction. Per-request (dynamic) prefixes are a
+possible future addition if per-tenant table tags ever matter.
+
 ## Status
 
 v0.1 — core mechanism with the test matrix in `tests/`. See `SPEC.md` for the

@@ -15,6 +15,8 @@ export interface FacadeContext {
   info: SchemaInfo;
   addTags(tags: Iterable<string>): void;
   schedulePurge(tags: Iterable<string>): void;
+  /** Observability: wildcard-tag / unobserved-write signals (see types.ts). */
+  emit(kind: "wildcard-tag" | "unobserved-write", reason: string): void;
 }
 
 const JOIN_METHODS = new Set([
@@ -122,7 +124,16 @@ function wrapRead(builder: Any, ctx: FacadeContext): Any {
   return wrapChain(
     builder,
     (result) => {
-      ctx.addTags(readTags(result, tables, uniques, ctx.info));
+      const tags = readTags(result, tables, uniques, ctx.info);
+      if (tags.has(WILDCARD)) {
+        ctx.emit(
+          "wildcard-tag",
+          tables.size === 0
+            ? "select with no observed from()"
+            : "non-table from()/join argument",
+        );
+      }
+      ctx.addTags(tags);
       return result;
     },
     (prop, args) => {
@@ -187,6 +198,9 @@ function wrapWrite(
     builder,
     (result) => {
       const tags = new Set<string>([tableTag]);
+      if (tableTag === WILDCARD) {
+        ctx.emit("unobserved-write", "write against a non-table target");
+      }
       if (rowPrecise) {
         for (const u of uniques) {
           if (u.viaPk && u.tableName === tableTag) {
@@ -223,9 +237,14 @@ function wrapRelational(query: Any, ctx: FacadeContext): Any {
           return (config: Any) => {
             const tables = new Set<string>([tableName]);
             for (const relKey of Object.keys(config?.with ?? {})) {
-              tables.add(
-                ctx.info.relationsByKey.get(tsKey)?.get(relKey) ?? WILDCARD,
-              );
+              const related = ctx.info.relationsByKey.get(tsKey)?.get(relKey);
+              if (related === undefined) {
+                ctx.emit(
+                  "wildcard-tag",
+                  `unresolvable relation '${tsKey}.${relKey}'`,
+                );
+              }
+              tables.add(related ?? WILDCARD);
             }
             // Callback-form `where` can't be walked structurally → list read.
             const uniques = config?.where && typeof config.where !== "function"
