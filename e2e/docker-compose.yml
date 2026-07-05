@@ -16,6 +16,29 @@ services:
       timeout: 2s
       retries: 30
 
+  # Same app on Node 24+ (native type stripping + node:sqlite). The repo is
+  # mounted read-only, so it is copied to /tmp where a root package.json
+  # ({"type":"module"}) and node_modules (drizzle-orm) can exist.
+  app-node:
+    image: node:24-alpine
+    volumes:
+      - ../:/repo:ro
+    environment:
+      - PURGE_URL=http://caddy-node/souin-api/souin
+    command: >
+      sh -c "cp -r /repo /tmp/pkg && cd /tmp/pkg
+      && printf '{\"type\":\"module\"}' > package.json
+      && npm install --no-save 'drizzle-orm@^0.45.1' --loglevel=error
+      && exec node e2e/app/server-node.ts"
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1:8000/ || exit 1",
+      ]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+
   caddy:
     build:
       context: .
@@ -24,6 +47,8 @@ services:
     # FromApp never copies the global `api` block into the handler config, so
     # the Souin API cannot be enabled from a Caddyfile. See SPEC.md.
     command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]
+    environment:
+      - UPSTREAM=app:8000
     volumes:
       - ./caddy.json:/etc/caddy/caddy.json:ro
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
@@ -31,4 +56,19 @@ services:
       - "127.0.0.1:8080:80"
     depends_on:
       app:
+        condition: service_healthy
+
+  caddy-node:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]
+    environment:
+      - UPSTREAM=app-node:8000
+    volumes:
+      - ./caddy.json:/etc/caddy/caddy.json:ro
+    ports:
+      - "127.0.0.1:8081:80"
+    depends_on:
+      app-node:
         condition: service_healthy

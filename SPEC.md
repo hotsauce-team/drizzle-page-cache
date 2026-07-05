@@ -95,9 +95,13 @@ tags on POST / errors / excluded paths), the lazy-thenable regression.
 ## e2e (e2e/)
 
 Caddy (xcaddy: `darkweak/souin/plugins/caddy` + otter storage, Souin API enabled
-via patched JSON config) in front of a minimal Deno app using this package with
-node:sqlite. Loop: render → HIT → write → purge → MISS with fresh body —
-verified passing 5 Jul 2026. Derived from the benchmarked configs in
+via patched JSON config) in front of the same app on **both runtimes**: a shared
+runtime-neutral `app.ts` (node:sqlite + drizzle + this package) with a Deno
+entry (`Deno.serve`) and a Node 24 entry (native type stripping; ~40-line
+`node:http` ↔ `Request`/`Response` adapter, the only Node-specific code). Loop:
+render → HIT → write → purge → MISS with fresh body —
+`./verify.sh caddy && ./verify.sh caddy-node`, both verified passing 5 Jul 2026.
+Derived from the benchmarked configs in
 https://claude.ai/code/artifact/9f7db1ca-3954-4dec-9143-94f0dd478540 (HotSauce
 vs WordPress report: proxy throughput, purge modules, invalidation table).
 

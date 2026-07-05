@@ -159,7 +159,7 @@
                   "handler": "reverse_proxy",
                   "upstreams": [
                     {
-                      "dial": "app:8000"
+                      "dial": "{env.UPSTREAM}"
                     }
                   ]
                 }
