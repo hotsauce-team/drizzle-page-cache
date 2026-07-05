@@ -138,7 +138,9 @@ nginx cheapest per request and OLS close behind while being the only one of the
 three with native tag purging. Caddy trails at ~76% throughput and ~2× CPU.
 Memory sums carry a caveat: caddy/nginx/angie share the same `app` container
 (whose V8 heap grows across earlier runs), so cross-target memory comparison is
-indicative only.
+indicative only. Measured proxy-only idle memory (cgroup `memory.current`, 30 s
+after one warmed request): **OpenLiteSpeed 34 MB** with `httpdWorkers 6`; from
+the earlier report's harness: nginx ~16 MB, Angie/Caddy ~21 MB, Varnish ~107 MB.
 
 ## Upstream issues to file
 
