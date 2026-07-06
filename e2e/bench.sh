@@ -10,7 +10,9 @@
 #   ./bench.sh ols caddy    # specific targets
 #
 # Targets: app (no cache, baseline) | caddy (Souin+otter) | ols (OpenLiteSpeed)
-#          nginx | angie (bench-only: no tag purging) | caddy-node | caddy-bun
+#          nginx | angie | varnish (+hitch for TLS) | envoy (bench-only:
+#          nginx/angie/varnish/envoy exercise no tag purging here)
+#          caddy-node | caddy-bun
 #
 # Tuning parity (so the comparison is fair):
 #   nginx/angie  worker_processes auto, cache on /dev/shm (tmpfs), upstream

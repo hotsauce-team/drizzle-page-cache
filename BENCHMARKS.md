@@ -224,6 +224,4 @@ Methodology: k6 runs in Docker on the compose network; CPU from cgroup v2
 `memory.current`/`memory.peak`; tuning parity documented in
 [`e2e/bench.sh`](e2e/bench.sh) (all cores everywhere, in-memory cache storage —
 tmpfs `/dev/shm` for nginx/Angie/OLS, malloc for Varnish, otter for Souin —
-upstream keepalive, logs off where possible). Related: the
-[HotSauce vs WordPress report](https://claude.ai/code/artifact/9f7db1ca-3954-4dec-9143-94f0dd478540)
-that seeded this methodology.
+upstream keepalive, logs off where possible).

@@ -110,9 +110,6 @@ three verified passing 5 Jul 2026. Fourth pairing: **OpenLiteSpeed** (GPLv3,
 (`X-LiteSpeed-Tag`, comma separator, `X-LiteSpeed-Cache-Control`, `wildcardTag`
 rename, purge-echo route + `litespeedPurger`) — `./verify.sh ols` passing 5 Jul
 2026, including tag-purge of query-string variants and colon-containing tags.
-Derived from the benchmarked configs in
-https://claude.ai/code/artifact/9f7db1ca-3954-4dec-9143-94f0dd478540 (HotSauce
-vs WordPress report: proxy throughput, purge modules, invalidation table).
 
 **Benchmarks** — full results, methodology, tuning parity, and the
 findings/footguns (Souin API bug, nginx cache-lock stalls, OLS TLS-flood
@@ -136,3 +133,12 @@ protection, Envoy cache filter, hitch workers) live in
      surrogate-key purging — build with
      `github.com/darkweak/souin/plugins/caddy` instead
      (https://caddy.community/t/-/30857).
+3. **envoyproxy/envoy** (found during benchmarking, v1.33 & v1.35 — full
+   bisection in BENCHMARKS.md finding 6):
+   - The HTTP cache filter never serves responses carrying a `Vary` header;
+     `allowed_vary_headers` has no observable effect (either casing, with or
+     without the request sending the varied header). Route-level header
+     mutations cannot work around it — the filter performs its own upstream
+     fetch, bypassing the router.
+   - Setting `ignore_case: true` on an `allowed_vary_headers` matcher segfaults
+     Envoy at startup (exit 139).

@@ -104,13 +104,10 @@ eventually-consistent by a few seconds. Working OLS config in `e2e/ols/`.
 
 Is it fast? See **[BENCHMARKS.md](BENCHMARKS.md)** — six open-source cache
 stacks measured (hits, uncached passthrough, TLS handshakes) with the bugs we
-found on the way. Or run the local bench (`e2e/bench.sh`, k6 + cgroup
-CPU/peak-memory accounting over the e2e stack, including tuned bench-only nginx
-and Angie pairings — numbers only comparable within one machine/run). On our
-reference run OLS sat at statistical parity with nginx and Angie on throughput
-(within ~2%) at comparable CPU — while being the only one of the three with
-native tag purging — and beat Caddy+Souin(otter) by ~30% throughput at half the
-CPU. Full table in `SPEC.md`.
+found on the way, and `e2e/bench.sh` to rerun everything locally. Short version:
+OLS sits at statistical parity with nginx, Angie, and Varnish on cache hits
+while being the only one with native tags, and leads TLS full handshakes by
+~35%.
 
 ## Observability
 
@@ -160,8 +157,10 @@ possible future addition if per-tenant table tags ever matter.
 
 v0.1 — core mechanism with the test matrix in `tests/`. See `SPEC.md` for the
 full design, verified constraints of drizzle-orm 0.45.x, and the roadmap (nested
-relation tags, Upstash `Cache` composition). The e2e purge-loop harness in
-`e2e/` runs the same app on **Deno, Node 24, and Bun** behind Caddy/Souin — the
-Node entry is a ~40-line `node:http` adapter, Bun needs none (`Bun.serve` speaks
-`Request`/`Response`), and only the demo's sqlite backend differs per runtime
-(Bun ships `bun:sqlite`, not `node:sqlite`).
+relation tags, Upstash `Cache` composition); see `BENCHMARKS.md` for the
+six-stack cache comparison and findings. The e2e purge loop in `e2e/` passes on
+**Caddy/Souin** — same app on Deno, Node 24, and Bun (the Node entry is a
+~40-line `node:http` adapter, Bun needs none, and only the demo's sqlite backend
+differs per runtime) — and on **OpenLiteSpeed** (header-driven purging via
+`purgeEcho` + `litespeedPurger`); nginx, Angie, Varnish + Hitch, and Envoy are
+benchmark-only pairings.
