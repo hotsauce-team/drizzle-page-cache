@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { DEFAULT_PURGE_ECHO_PATH } from "./purgers.ts";
 import { analyzeSchema, WILDCARD } from "./derive.ts";
 import { type FacadeContext, wrapDb } from "./facade.ts";
 import type {
@@ -20,7 +21,7 @@ export function createPageCache(options: PageCacheOptions): PageCache {
   const maxHeaderBytes = options.maxHeaderBytes ?? 7900;
   const echo = options.purgeEcho === undefined ? undefined : {
     token: options.purgeEcho.token,
-    path: options.purgeEcho.path ?? "/__drizzle-page-cache/purge",
+    path: options.purgeEcho.path ?? DEFAULT_PURGE_ECHO_PATH,
     header: options.purgeEcho.header ?? "X-LiteSpeed-Purge",
     value: options.purgeEcho.value ??
       ((tags: readonly string[]) => tags.map((t) => `tag=${t}`).join(", ")),

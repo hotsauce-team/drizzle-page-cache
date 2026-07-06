@@ -1,5 +1,8 @@
 import type { Purger } from "./types.ts";
 
+/** Default path of the middleware's purge-echo route (see `purgeEcho`). */
+export const DEFAULT_PURGE_ECHO_PATH = "/__drizzle-page-cache/purge";
+
 /**
  * Caddy cache-handler (Souin): PURGE by Surrogate-Key against the Souin API.
  * Requires `cache { api { souin } }` in the Caddyfile; default endpoint is

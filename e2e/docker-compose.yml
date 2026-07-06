@@ -105,7 +105,7 @@ services:
       - ../:/repo:ro
     environment:
       - PURGE_STYLE=litespeed
-      - PURGE_URL=http://ols/__drizzle-page-cache/purge
+      - PURGE_SITE=http://ols
       - PURGE_TOKEN=e2e-secret
     command: deno run --allow-net --allow-env /repo/e2e/app/server.ts
     healthcheck:

@@ -68,6 +68,14 @@ Deno/Node/Bun (Workers via `nodejs_compat`).
   `Logger` was considered and rejected as the channel: wrong interface
   (`logQuery(sql, params)` only) and reaching the configured instance requires
   internals access.
+- **Dialect entrypoints** (drizzle-adapter style): a proxy dialect with
+  _coupled_ options gets its own subpath export whose factory derives them from
+  minimal inputs and whose option type `Omit`s the controlled keys (compile-time
+  rejection). Rule: coupled invariants → entrypoint
+  (`drizzle-page-cache/litespeed`: shared token/path, tag header + separator,
+  ttl-coherent cache-control, wildcard rename); a single `purge:` option → just
+  a purger export (Souin/Varnish/Angie). The root `createPageCache` remains the
+  escape hatch and the documented expanded form.
 - **Namespacing** (`tagPrefix`, static string): applied verbatim to every tag
   (derived, manual, wildcard) and every purge at the two choke points, so reads
   and purges always agree. Solves cross-app collisions behind a shared

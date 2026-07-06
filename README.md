@@ -80,27 +80,55 @@ method) for your CDN.
 
 ### LiteSpeed / OpenLiteSpeed
 
-OpenLiteSpeed (GPLv3) has native tag support, but purging is **header-driven**:
-the purge instruction must ride a backend response _through_ the proxy rather
-than hit a purge endpoint. Three options cover it:
+OpenLiteSpeed (GPLv3) has native tag support with its own dialect: a different
+tag header, its own cache-control header, and **header-driven purging** (the
+purge instruction rides a backend response _through_ the proxy). Use the
+dedicated entrypoint — drizzle-adapter style — which derives the whole dialect
+from three inputs:
+
+```ts
+import { createPageCache } from "drizzle-page-cache/litespeed";
+
+const pageCache = createPageCache({
+  schema,
+  site: "https://example.com", // the proxy's PUBLIC base URL
+  token: PURGE_TOKEN,
+  ttl: 300, // drives s-maxage AND X-LiteSpeed-Cache-Control together
+});
+```
+
+One `token` guards both halves of the purge loop (the middleware's echo route
+and the purger that fetches it **via the proxy** — a purge header the proxy
+never sees purges nothing); one `site` keeps their paths in agreement; one `ttl`
+keeps the two cache-control headers coherent; and the `*` wildcard is renamed
+automatically (a literal `*` purge flushes LiteSpeed's **entire** cache — the
+entrypoint refuses it). The dialect-controlled options (`header`,
+`headerSeparator`, `cacheHeaders`, `wildcardTag`, `purge`, `purgeEcho`) are
+rejected at compile time; for a custom setup, use the root `createPageCache`
+with those options explicitly:
+
+<details>
+<summary>What the entrypoint configures (expanded reference)</summary>
 
 ```ts
 createPageCache({
   schema,
-  purge: litespeedPurger("http://your-site/__drizzle-page-cache/purge", token),
+  purge: litespeedPurger(
+    "https://example.com/__drizzle-page-cache/purge",
+    token,
+  ),
   header: "X-LiteSpeed-Tag",
   headerSeparator: ",",
   cacheHeaders: { "X-LiteSpeed-Cache-Control": "public, max-age=300" },
-  wildcardTag: "dpc-wild", // REQUIRED: a literal `*` purge flushes EVERYTHING
-  purgeEcho: { token }, // middleware serves the purge-echo route
+  wildcardTag: "dpc-wild",
+  purgeEcho: { token },
 });
 ```
 
-`purgeEcho` makes the middleware serve a token-guarded route whose response
-carries `X-LiteSpeed-Purge`; `litespeedPurger` fetches it **via the proxy's
-public URL** (never the app directly — a purge header the proxy doesn't see
-purges nothing). Note OpenLiteSpeed batches purges internally, so eviction is
-eventually-consistent by a few seconds. Working OLS config in `e2e/ols/`.
+</details>
+
+Note OpenLiteSpeed batches purges internally, so eviction is
+eventually-consistent by a few seconds. Working OLS server config in `e2e/ols/`.
 
 Is it fast? See **[BENCHMARKS.md](BENCHMARKS.md)** — six open-source cache
 stacks measured (hits, uncached passthrough, TLS handshakes) with the bugs we

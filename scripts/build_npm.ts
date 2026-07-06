@@ -8,7 +8,10 @@ const version = Deno.args[0] ??
 await emptyDir("./npm");
 
 await build({
-  entryPoints: ["./mod.ts"],
+  entryPoints: [
+    "./mod.ts",
+    { name: "./litespeed", path: "./litespeed/mod.ts" },
+  ],
   outDir: "./npm",
   shims: { deno: false },
   test: false,
