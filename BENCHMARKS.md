@@ -1,12 +1,13 @@
 # Open-source cache servers for tag-based invalidation: benchmarks & findings
 
-Six open-source proxy stacks benchmarked as the HTTP cache layer for
-[drizzle-page-cache](README.md): **Caddy + Souin**, **OpenLiteSpeed**,
-**nginx**, **Angie**, **Varnish + Hitch**, and **Envoy** — three scenarios each
-(cache hits, uncached passthrough, TLS handshake stress), plus the bugs and
-footguns found along the way. Everything is reproducible from this repo: the
-harness is [`e2e/bench.sh`](e2e/bench.sh), the exact server configs are in
-[`e2e/`](e2e/), and the purge loop the tag-capable caches passed is
+Five open-source proxy stacks benchmarked as the HTTP cache layer for
+[drizzle-page-cache](README.md): **OpenLiteSpeed**, **Caddy + Souin**,
+**Varnish + Hitch**, **Angie**, and **nginx** — three scenarios each (cache
+hits, uncached passthrough, TLS handshake stress), plus the bugs and footguns
+found along the way. Everything is reproducible from this repo: the harness is
+[`e2e/bench.sh`](e2e/bench.sh), the exact server configs are in [`e2e/`](e2e/),
+and the purge loop the invalidation-capable stacks pass — OpenLiteSpeed,
+Caddy/Souin, and Angie (wildcard URL purging) — is
 [`e2e/verify.sh`](e2e/verify.sh).
 
 > **Scope honesty:** numbers come from one machine (6-vCPU Docker VM on Apple
@@ -17,14 +18,13 @@ harness is [`e2e/bench.sh`](e2e/bench.sh), the exact server configs are in
 
 ## TL;DR
 
-- **Cache hits:** OpenLiteSpeed, nginx, Angie, and Varnish are at statistical
+- **Cache hits:** OpenLiteSpeed, Varnish, Angie, and nginx are at statistical
   parity (~50–54k req/s, ~0.02–0.03 CPU-ms); Caddy+Souin trails at ~38k with ~2×
-  the CPU. **Envoy's cache filter never served a single hit** (finding 6).
+  the CPU.
 - **Uncached passthrough:** every proxy sits at direct-app parity. A review
   claiming "OLS is slow uncached" did not reproduce.
 - **TLS full handshakes:** OpenLiteSpeed wins decisively — ~35% more
-  handshakes/s at ~40% less CPU than the OpenSSL/Go/hitch cluster; Envoy is
-  slowest despite also using BoringSSL.
+  handshakes/s at ~40% less CPU than the OpenSSL/Go/hitch cluster.
 - **OpenLiteSpeed is the only open-source server combining native cache tags,
   built-in auto-HTTPS (v1.9+), TLS-flood protection by default, and nginx-class
   speed.** Costs: batched (seconds-delayed) purges, GUI-first docs,
@@ -33,23 +33,29 @@ harness is [`e2e/bench.sh`](e2e/bench.sh), the exact server configs are in
 
 ## The comparison
 
-|                             | **OpenLiteSpeed**                         | **Angie**                      | **Caddy + Souin**               | **nginx**                    | **Varnish + Hitch**            | **Envoy**                       |
-| --------------------------- | ----------------------------------------- | ------------------------------ | ------------------------------- | ---------------------------- | ------------------------------ | ------------------------------- |
-| License                     | GPLv3¹                                    | BSD-2                          | Apache-2.0                      | BSD-2                        | BSD-2 (both)                   | Apache-2.0                      |
-| Install                     | official image/repos                      | official image/repos           | **custom xcaddy build**         | everywhere                   | two official images            | official image                  |
-| Auto-HTTPS                  | ✅ built-in acme.sh orchestration (v1.9+) | ✅ native in-process ACME      | ✅ best-in-class, zero config   | ⚠️ preview module or certbot | ⚠️ hitch has no ACME (certbot) | ❌ (BYO cert / SDS)             |
-| Tag purging                 | ✅ **native** (`X-LiteSpeed-Tag/-Purge`)  | ❌ URL + wildcard purge module | ✅ Surrogate-Key API²           | ❌ (NGINX-Plus-only)         | ✅ xkey vmod + bans            | ❌ **no purge of any kind**     |
-| Purge latency               | seconds (batched)                         | immediate                      | immediate                       | —                            | immediate                      | —                               |
-| Cache hits (req/s @ CPU-ms) | 50.6k @ 0.028                             | 53.7k @ 0.019                  | 38.5k @ 0.050                   | 51.0k @ 0.027                | 50.4k @ 0.028                  | **n/a — never hit** (finding 6) |
-| TLS handshakes/s @ CPU-ms   | **6,294 @ 0.23**                          | 4,578 @ 0.39                   | 4,666 @ 0.39                    | 4,519 @ 0.40                 | 4,524 @ 0.43                   | 3,946 @ 0.49                    |
-| Proxy idle RAM              | 34 MB                                     | ~21 MB                         | ~21 MB                          | ~16 MB                       | ~107 MB + hitch                | ~60 MB                          |
-| Purge loop e2e in this repo | ✅ passing                                | bench only                     | ✅ passing (Deno/Node/Bun apps) | bench only                   | bench only³                    | impossible                      |
+|                             | **OpenLiteSpeed**                         | **Caddy + Souin**               | **Varnish + Hitch**            | **Angie**                           | **nginx**                    |
+| --------------------------- | ----------------------------------------- | ------------------------------- | ------------------------------ | ----------------------------------- | ---------------------------- |
+| License                     | GPLv3¹                                    | Apache-2.0                      | BSD-2 (both)                   | BSD-2                               | BSD-2                        |
+| Install                     | official image/repos                      | **custom xcaddy build**         | two official images            | official image/repos                | everywhere                   |
+| Auto-HTTPS                  | ✅ built-in acme.sh orchestration (v1.9+) | ✅ best-in-class, zero config   | ⚠️ hitch has no ACME (certbot) | ✅ native in-process ACME           | ⚠️ preview module or certbot |
+| Tag purging                 | ✅ **native** (`X-LiteSpeed-Tag/-Purge`)  | ✅ Surrogate-Key API²           | ✅ xkey vmod + bans            | ❌ URL + wildcard purge (module³)   | ❌ (Plus-only; or module³)   |
+| Purge latency               | seconds (batched)                         | immediate                       | immediate                      | immediate                           | immediate (with module³)     |
+| Cache hits (req/s @ CPU-ms) | 50.6k @ 0.028                             | 38.5k @ 0.050                   | 50.4k @ 0.028                  | 53.7k @ 0.019                       | 51.0k @ 0.027                |
+| TLS handshakes/s @ CPU-ms   | **6,294 @ 0.23**                          | 4,666 @ 0.39                    | 4,524 @ 0.43                   | 4,578 @ 0.39                        | 4,519 @ 0.40                 |
+| Proxy idle RAM              | 34 MB                                     | ~21 MB                          | ~107 MB + hitch                | ~21 MB                              | ~16 MB                       |
+| Purge loop e2e in this repo | ✅ passing                                | ✅ passing (Deno/Node/Bun apps) | bench only⁴                    | ✅ **passing (wildcard URL purge)** | bench only                   |
 
 ¹ GPLv3 imposes nothing on operators (running a server is not distribution); it
 matters only when redistributing modified server binaries. ² Requires building
 with `darkweak/souin/plugins/caddy` and a patched JSON config — findings 1
-and 2. ³ `varnishPurger` (xkey) exists in the package; the e2e pairing exercises
-caching only.
+and 2. ³ The same community module either way: Angie packages
+[`ngx_cache_purge`](https://github.com/nginx-modules/ngx_cache_purge) as its
+official prebuilt `angie-module-cache-purge` (preinstalled in the official
+Docker image); **free nginx ships no purge at all** — native `proxy_cache_purge`
+is NGINX-Plus-only, so open-source nginx needs that third-party module compiled
+in yourself. Wildcard purging is a trailing-`*` prefix match on the cache key —
+see finding 6 for the config it requires. ⁴ `varnishPurger` (xkey) exists in the
+package; the e2e pairing exercises caching only.
 
 ## Results (single run, 5 Jul 2026)
 
@@ -58,17 +64,16 @@ caching only.
 CPU is cgroup `usage_usec` deltas summed across proxy **and** app containers, ÷
 completed requests.
 
-| target                | req/s                                             | p50 (ms) | p95 (ms) | CPU-ms/req |
-| --------------------- | ------------------------------------------------- | -------- | -------- | ---------- |
-| direct app (no cache) | 11,162                                            | 0.59     | 1.03     | 0.091      |
-| Caddy + Souin (otter) | 38,468                                            | 0.15     | 0.37     | 0.050      |
-| Varnish               | 50,430                                            | 0.10     | 0.27     | 0.028      |
-| OpenLiteSpeed         | 50,589                                            | 0.10     | 0.27     | 0.028      |
-| nginx                 | 50,957                                            | 0.11     | 0.27     | 0.027      |
-| Angie                 | 53,653                                            | 0.10     | 0.26     | 0.019      |
-| Envoy                 | _10,025 — passthrough; the filter cached nothing_ |          |          | _0.180_    |
+| target                | req/s  | p50 (ms) | p95 (ms) | CPU-ms/req |
+| --------------------- | ------ | -------- | -------- | ---------- |
+| direct app (no cache) | 11,162 | 0.59     | 1.03     | 0.091      |
+| Caddy + Souin (otter) | 38,468 | 0.15     | 0.37     | 0.050      |
+| Varnish               | 50,430 | 0.10     | 0.27     | 0.028      |
+| OpenLiteSpeed         | 50,589 | 0.10     | 0.27     | 0.028      |
+| nginx                 | 50,957 | 0.11     | 0.27     | 0.027      |
+| Angie                 | 53,653 | 0.10     | 0.26     | 0.019      |
 
-The C-family cluster (OLS/nginx/Angie/Varnish) is within jitter of itself.
+The C-family cluster (OLS/Varnish/Angie/nginx) is within jitter of itself.
 Caddy's gap is Souin's Go middleware chain: Caddy serving a static file with no
 cache module caps at ~31k, so Souin+otter already runs at ~90% of Caddy's own
 ceiling (and otter matters: Souin's default in-memory store manages only ~2.6k
@@ -84,7 +89,6 @@ before measuring.
 | direct app (baseline) | 14,375 | 0.46     | 0.070      | —                                              |
 | Angie                 | 12,458 | 0.51     | 0.115      | parity                                         |
 | nginx                 | 11,942 | 0.53     | 0.127      | parity                                         |
-| Envoy                 | 11,906 | 0.54     | 0.167      | parity                                         |
 | Caddy + Souin         | 11,769 | 0.56     | 0.120      | parity                                         |
 | OpenLiteSpeed         | 11,099 | 0.60     | 0.138      | ~95% — "OLS slow uncached": **not reproduced** |
 | Varnish               | 10,282 | 0.64     | 0.223      | ~90%                                           |
@@ -108,12 +112,11 @@ the default is ONE) speaking PROXY protocol to Varnish.
 | Angie             | 4,578        | 0.37     | 0.392      | OpenSSL       |
 | Hitch → Varnish   | 4,524        | 0.60     | 0.427      | OpenSSL       |
 | nginx             | 4,519        | 0.38     | 0.403      | OpenSSL       |
-| Envoy             | 3,946        | 0.92     | 0.495      | BoringSSL     |
 
-OLS leads by ~35% — and Envoy trailing _despite BoringSSL_ shows the lead isn't
-only the crypto library; per-connection setup cost matters. This scenario is the
-TLS-handshake-flood resilience number: an attacker pays a ClientHello, you pay
-an ECDSA signature (and see finding 4 for OLS's other answer to that attack).
+OLS leads by ~35% — and not only because of the crypto library; per-connection
+setup cost matters. This scenario is the TLS-handshake-flood resilience number:
+an attacker pays a ClientHello, you pay an ECDSA signature (and see finding 4
+for OLS's other answer to that attack).
 
 ## Findings (the part worth citing)
 
@@ -131,13 +134,13 @@ an ECDSA signature (and see finding 4 for OLS's other answer to that attack).
    `Configuration.API.souin.enable: true`
    ([`e2e/gen-caddy-json.sh`](e2e/gen-caddy-json.sh)). Upstream-issue-worthy.
 
-3. **nginx/Angie: `proxy_cache_lock` + a `no-store` response = 5-second
+3. **Angie/nginx: `proxy_cache_lock` + a `no-store` response = 5-second
    stalls.** With a single cached `location`, the lock admits one request to
    "populate the cache"; a `no-store` response populates nothing, so every
    waiter eats the full `proxy_cache_lock_timeout` (5 s default). Measured: 2.6k
    req/s with p50 0.29 ms but max 5,008 ms. Fix (idiomatic): a cache-free
-   `location` for known-uncacheable prefixes. OLS, Souin, Varnish, and Envoy
-   handle uncacheable responses gracefully without config help.
+   `location` for known-uncacheable prefixes. OLS, Souin, and Varnish handle
+   uncacheable responses gracefully without config help.
 
 4. **OpenLiteSpeed ships TLS-handshake-flood protection ON by default.** Past
    ~200 new SSL connections/s from one client IP it logs "possible SSL
@@ -152,38 +155,21 @@ an ECDSA signature (and see finding 4 for OLS's other answer to that attack).
    a parity trap for any multi-core TLS comparison (first probe: 2.9k
    handshakes/s at p50 1.5 ms; 4.5k after `--workers=6`).
 
-6. **Envoy's HTTP cache filter cannot serve any response carrying a `Vary`
-   header — which is nearly every framework-rendered response.** Root-caused by
-   bisection against a synthetic upstream (nginx `return 200`), verified on
-   v1.33 and v1.35:
-   - identical response _without_ `Vary` → caches and serves hits (`Age` header
-     appears);
-   - add only `Vary: Accept-Encoding` → **zero hits, ever** — regardless of
-     `allowed_vary_headers` (`exact: "accept-encoding"` and `"Accept-Encoding"`
-     both ineffective) and regardless of whether the request sends
-     `Accept-Encoding`;
-   - setting `ignore_case: true` on the allowlist matcher **segfaults Envoy at
-     startup** (exit 139) — a second bug.
-
-   Since runtimes add `Vary: Accept-Encoding` automatically (Deno.serve stamps
-   it unconditionally, even on responses it does not compress), the filter is
-   effectively non-functional for HTML app caching. Every other cache in this
-   matrix handled the same header without configuration. Under load the
-   "cache-hit" scenario equaled passthrough (10.0k vs 11.9k req/s at the same
-   CPU).
-
-   **No Envoy-side workaround exists**, and we tried the obvious one: strip
-   `accept-encoding` from upstream requests and drop the (then-vestigial) `vary`
-   from responses via route-level
-   `request_headers_to_remove`/`response_headers_to_remove`. Neither mutation
-   had any observable effect with the cache filter in the chain — consistent
-   with the filter's own trace output (`cache/upstream_request.cc`): **the cache
-   filter performs its own upstream fetch, bypassing the router filter**, where
-   route-level header mutations are applied.
-
-   Independently disqualifying: the filter documents **no purge/invalidation
-   mechanism whatsoever**. The bugs (vary allowlist ineffective, `ignore_case`
-   segfault) are upstream-issue-worthy; either way, not a candidate.
+6. **Angie's cache-purge module silently no-ops without an explicit
+   `proxy_cache_key`.** With `proxy_cache_purge PURGE from ...` in the caching
+   location and the key left at nginx's implicit default
+   (`$scheme$proxy_host$request_uri`), caching works normally but **every**
+   PURGE — exact or wildcard — returns `412 Precondition Failed` and evicts
+   nothing. Declare the key explicitly (e.g. `$uri$is_args$args`, the key
+   Angie's own module docs use) and both purge forms work; the variable part
+   must sit at the **end** of the key or trailing-`*` wildcard purges won't
+   prefix-match. One adjacent trap: 412 (not 404) is the module's default "not
+   in cache" answer (`cache_purge_legacy_status`), so purgers must treat both as
+   success — `angiePurger` does. (`Vary` responses are a non-issue: with an
+   explicit key the module purged Vary'd entries fine.) Verified config:
+   [`e2e/nginx/angie.conf`](e2e/nginx/angie.conf); the wildcard purge loop
+   (write to one row evicts every `/post/*` entry, query-string variants
+   included) is asserted by [`e2e/verify.sh`](e2e/verify.sh)&nbsp;`angie`.
 
 ## Conclusions
 
@@ -193,19 +179,21 @@ an ECDSA signature (and see finding 4 for OLS's other answer to that attack).
   Trade-offs: purges are batched (seconds of eventual consistency — fine under a
   TTL-backstop model), docs are GUI-first, ACME is orchestrated acme.sh rather
   than in-process.
-- **Want nginx dialect + immediate purges → Angie.** Consistently the fastest
-  hit path, in-process ACME, official purge/keyval modules — but invalidation is
-  URL-shaped (this package's `angiePurger` maps tags → URL patterns).
 - **Want the simplest ops story and can spare ~25% throughput → Caddy + Souin.**
   Best TLS automation and a real Surrogate-Key API — budget for the custom build
   and findings 1–2.
 - **Want predicate invalidation (bans) or xkey tags at C speed → Varnish**, and
   accept two processes (hitch for TLS, no ACME in either) and the VCL learning
   curve. Hit-path parity with nginx measured here.
-- **nginx** is the reference with no invalidation story in open source.
-- **Envoy** is an excellent proxy and a non-starter as a page cache (finding 6):
-  the cache filter is unreliable and has no invalidation. Use it for what it's
-  for; put the cache elsewhere.
+- **Want nginx dialect + immediate purges → Angie.** Consistently the fastest
+  hit path, in-process ACME, official purge/keyval modules — but invalidation is
+  URL-shaped (this package's `angiePurger` maps tags → URL patterns; the full
+  write → wildcard-purge loop is verified by `e2e/verify.sh angie`, and finding
+  6 documents the `proxy_cache_key` footgun it requires you to avoid).
+- **nginx** is the reference with no invalidation in the official open-source
+  build: native `proxy_cache_purge` is NGINX-Plus-only, and free nginx ships no
+  purge module — you must compile in the same community `ngx_cache_purge` module
+  that Angie packages officially (which is Angie's practical edge here).
 
 ## Reproduce
 
@@ -215,7 +203,7 @@ cd e2e
 ./gen-caddy-json.sh         # regenerate the patched caddy.json (needs built image)
 docker compose up -d --build
 ./bench.sh                  # all targets × all scenarios → bench-results/
-./verify.sh caddy && ./verify.sh ols   # the tag-purge loops
+./verify.sh all             # every purge loop, live steps + PASS/FAIL summary
 docker compose down
 ```
 
@@ -223,5 +211,5 @@ Methodology: k6 runs in Docker on the compose network; CPU from cgroup v2
 `usage_usec` deltas across each target's containers; memory from
 `memory.current`/`memory.peak`; tuning parity documented in
 [`e2e/bench.sh`](e2e/bench.sh) (all cores everywhere, in-memory cache storage —
-tmpfs `/dev/shm` for nginx/Angie/OLS, malloc for Varnish, otter for Souin —
+tmpfs `/dev/shm` for OLS/Angie/nginx, malloc for Varnish, otter for Souin —
 upstream keepalive, logs off where possible).

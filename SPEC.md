@@ -121,7 +121,7 @@ rename, purge-echo route + `litespeedPurger`) — `./verify.sh ols` passing 5 Ju
 
 **Benchmarks** — full results, methodology, tuning parity, and the
 findings/footguns (Souin API bug, nginx cache-lock stalls, OLS TLS-flood
-protection, Envoy cache filter, hitch workers) live in
+protection, Angie purge cache-key trap, hitch workers) live in
 [BENCHMARKS.md](BENCHMARKS.md). Local-only harness: `e2e/bench.sh`.
 
 ## Upstream issues to file
@@ -141,12 +141,3 @@ protection, Envoy cache filter, hitch workers) live in
      surrogate-key purging — build with
      `github.com/darkweak/souin/plugins/caddy` instead
      (https://caddy.community/t/-/30857).
-3. **envoyproxy/envoy** (found during benchmarking, v1.33 & v1.35 — full
-   bisection in BENCHMARKS.md finding 6):
-   - The HTTP cache filter never serves responses carrying a `Vary` header;
-     `allowed_vary_headers` has no observable effect (either casing, with or
-     without the request sending the varied header). Route-level header
-     mutations cannot work around it — the filter performs its own upstream
-     fetch, bypassing the router.
-   - Setting `ignore_case: true` on an `allowed_vary_headers` matcher segfaults
-     Envoy at startup (exit 139).
