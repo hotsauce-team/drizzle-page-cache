@@ -3,13 +3,16 @@
   "version": "0.1.0",
   "exports": {
     ".": "./mod.ts",
-    "./litespeed": "./litespeed/mod.ts"
+    "./litespeed": "./litespeed/mod.ts",
+    "./souin": "./souin/mod.ts",
+    "./varnish": "./varnish/mod.ts",
+    "./angie": "./angie/mod.ts"
   },
   "license": "MIT",
 
   "tasks": {
     "test": "deno test --allow-env --allow-read tests/",
-    "check": "deno check mod.ts litespeed/mod.ts tests/",
+    "check": "deno check mod.ts litespeed/mod.ts souin/mod.ts varnish/mod.ts angie/mod.ts tests/",
     "build:npm": "deno run -A scripts/build_npm.ts"
   },
 
@@ -20,7 +23,16 @@
   },
 
   "publish": {
-    "include": ["mod.ts", "*.ts", "litespeed/", "README.md", "LICENSE"],
+    "include": [
+      "mod.ts",
+      "*.ts",
+      "litespeed/",
+      "souin/",
+      "varnish/",
+      "angie/",
+      "README.md",
+      "LICENSE"
+    ],
     "exclude": ["tests/", "e2e/", "scripts/"]
   },
 

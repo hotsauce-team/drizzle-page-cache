@@ -11,6 +11,9 @@ await build({
   entryPoints: [
     "./mod.ts",
     { name: "./litespeed", path: "./litespeed/mod.ts" },
+    { name: "./souin", path: "./souin/mod.ts" },
+    { name: "./varnish", path: "./varnish/mod.ts" },
+    { name: "./angie", path: "./angie/mod.ts" },
   ],
   outDir: "./npm",
   shims: { deno: false },
@@ -38,6 +41,8 @@ await build({
       "souin",
     ],
     peerDependencies: { "drizzle-orm": ">=0.44.0 <1" },
+    // For dnt's typecheck of `node:async_hooks` (page_cache.ts); not shipped.
+    devDependencies: { "@types/node": "^22.0.0" },
   },
   postBuild() {
     Deno.copyFileSync("LICENSE", "npm/LICENSE");

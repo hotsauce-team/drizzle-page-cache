@@ -4,6 +4,27 @@ import type { Purger } from "./types.ts";
 export const DEFAULT_PURGE_ECHO_PATH = "/__drizzle-page-cache/purge";
 
 /**
+ * LiteSpeed / OpenLiteSpeed: purging is header-driven — the backend response
+ * must carry `X-LiteSpeed-Purge` while flowing THROUGH the proxy. This purger
+ * fetches the middleware's purge-echo route (see `purgeEcho` option) via the
+ * proxy's public URL; the echoed header performs the purge.
+ *
+ * `echoUrl` MUST point at the proxy (e.g. `http://ols/__drizzle-page-cache/purge`),
+ * never directly at the app — a purge header the proxy never sees purges nothing.
+ */
+export function litespeedPurger(echoUrl: string, token: string): Purger {
+  return {
+    async purge(tags) {
+      const url = new URL(echoUrl);
+      url.searchParams.set("token", token);
+      url.searchParams.set("tags", tags.join(","));
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`litespeed purge echo: ${res.status}`);
+    },
+  };
+}
+
+/**
  * Caddy cache-handler (Souin): PURGE by Surrogate-Key against the Souin API.
  * Requires `cache { api { souin } }` in the Caddyfile; default endpoint is
  * `http://host/souin-api/souin`.
@@ -39,7 +60,10 @@ export function varnishPurger(url: string): Purger {
 
 /**
  * Angie / nginx-family (no tag support): map tags to URL patterns and issue
- * wildcard PURGE requests (Angie's cache-purge module supports `/path/*`).
+ * wildcard PURGE requests (Angie's cache-purge module supports `/path/*` —
+ * a trailing-`*` prefix match on the cache key). The proxy MUST declare
+ * `proxy_cache_key` explicitly with the URI part last, or every PURGE
+ * silently 412s — see README "nginx-family" and e2e/nginx/angie.conf.
  * The '*' entry is the fallback for unknown tags — omit it to skip them.
  */
 export function angiePurger(
@@ -59,32 +83,13 @@ export function angiePurger(
       await Promise.all(
         [...urls].map(async (path) => {
           const res = await fetch(base + path, { method: "PURGE" });
-          if (!res.ok && res.status !== 404) {
+          // "not in cache" is a success: 404, or 412 with the module's
+          // default `cache_purge_legacy_status on`.
+          if (!res.ok && res.status !== 404 && res.status !== 412) {
             throw new Error(`angie purge ${path}: ${res.status}`);
           }
         }),
       );
-    },
-  };
-}
-
-/**
- * LiteSpeed / OpenLiteSpeed: purging is header-driven — the backend response
- * must carry `X-LiteSpeed-Purge` while flowing THROUGH the proxy. This purger
- * fetches the middleware's purge-echo route (see `purgeEcho` option) via the
- * proxy's public URL; the echoed header performs the purge.
- *
- * `echoUrl` MUST point at the proxy (e.g. `http://ols/__drizzle-page-cache/purge`),
- * never directly at the app — a purge header the proxy never sees purges nothing.
- */
-export function litespeedPurger(echoUrl: string, token: string): Purger {
-  return {
-    async purge(tags) {
-      const url = new URL(echoUrl);
-      url.searchParams.set("token", token);
-      url.searchParams.set("tags", tags.join(","));
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`litespeed purge echo: ${res.status}`);
     },
   };
 }
