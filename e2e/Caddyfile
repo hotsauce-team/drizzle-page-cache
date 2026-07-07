@@ -14,9 +14,13 @@
 	}
 }
 
+# {env.UPSTREAM} is resolved by Caddy at RUNTIME (unlike {$UPSTREAM}, which
+# `caddy adapt` would bake in at generation time) — one shared caddy.json
+# serves all three pairings, each container dialing its own app via the
+# UPSTREAM env var in docker-compose.yml.
 :80 {
 	cache
-	reverse_proxy app:8000
+	reverse_proxy {env.UPSTREAM}
 }
 
 # TLS listener for the handshake-stress bench. Session tickets are disabled
@@ -25,5 +29,5 @@
 :443 {
 	tls /certs/cert.pem /certs/key.pem
 	cache
-	reverse_proxy app:8000
+	reverse_proxy {env.UPSTREAM}
 }

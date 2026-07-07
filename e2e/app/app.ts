@@ -7,7 +7,8 @@ import process from "node:process";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { createPageCache, souinPurger } from "../../mod.ts";
+import { createPageCache as createSouinPageCache } from "../../souin/mod.ts";
+import { createPageCache as createAngiePageCache } from "../../angie/mod.ts";
 import { createPageCache as createLiteSpeedPageCache } from "../../litespeed/mod.ts";
 import type { Handler } from "../../types.ts";
 
@@ -33,12 +34,13 @@ export type SqliteExec = (
 ) => Promise<{ rows: unknown[] }>;
 
 export function createHandler(exec: SqliteExec): Handler {
-  // PURGE_STYLE=litespeed dogfoods the drizzle-page-cache/litespeed
-  // entrypoint (header-driven purging); default is the Souin PURGE API.
-  const litespeed = process.env.PURGE_STYLE === "litespeed";
+  // Each PURGE_STYLE dogfoods its directory entrypoint: litespeed
+  // (header-driven purging), angie (tag → URL-pattern wildcard PURGE), and
+  // the default, souin (PURGE API). PURGE_SITE is the proxy's base URL.
+  const style = process.env.PURGE_STYLE;
   const token = process.env.PURGE_TOKEN ?? "e2e-secret";
 
-  const pageCache = litespeed
+  const pageCache = style === "litespeed"
     ? createLiteSpeedPageCache({
       schema,
       ttl: 300,
@@ -46,13 +48,21 @@ export function createHandler(exec: SqliteExec): Handler {
       site: process.env.PURGE_SITE ?? "http://ols",
       token,
     })
-    : createPageCache({
+    : style === "angie"
+    ? createAngiePageCache({
       schema,
       ttl: 300,
       settleMs: 10,
-      purge: souinPurger(
-        process.env.PURGE_URL ?? "http://caddy/souin-api/souin",
-      ),
+      site: process.env.PURGE_SITE ?? "http://angie",
+      // Any write to posts purges the list page and every /post/* entry —
+      // URL-pattern purging is coarser than tags by design.
+      routes: { posts: ["/", "/post/*"] },
+    })
+    : createSouinPageCache({
+      schema,
+      ttl: 300,
+      settleMs: 10,
+      site: process.env.PURGE_SITE ?? "http://caddy",
     });
 
   const db = pageCache.wrap(drizzle(exec, { schema }));
@@ -86,29 +96,6 @@ export function createHandler(exec: SqliteExec): Handler {
     // the excluded /admin prefix (middleware adds no cache headers there) and
     // sends no-store explicitly, so every proxy passes it through. Measures
     // pure proxy passthrough overhead on cache misses.
-    // Bench probe: identical work, but plain `max-age` instead of the
-    // browser-safe `max-age=0, s-maxage=N` split. Exists to test caches
-    // whose RFC 7234 support is incomplete (Envoy's alpha filter ignores
-    // s-maxage — see BENCHMARKS.md).
-    if (url.pathname === "/admin/plainmax") {
-      const [post] = await db.select().from(posts).where(eq(posts.id, 3));
-      const res = html(`<h1>${post?.title ?? "?"}</h1>`);
-      res.headers.set("Cache-Control", "public, max-age=300");
-      // Envoy's cache filter appears to require a validator — see BENCHMARKS.md
-      res.headers.set("ETag", '"bench-static"');
-      return res;
-    }
-    // Bench probe: sandbox-identical conditions — NO Vary header (Deno only
-    // adds Vary: Accept-Encoding for compressible content types).
-    if (url.pathname === "/admin/novary") {
-      return new Response(`novary ${Date.now()}`, {
-        headers: {
-          "content-type": "application/octet-stream",
-          "cache-control": "public, max-age=300",
-          "etag": '"bench-novary"',
-        },
-      });
-    }
     if (url.pathname === "/admin/uncached") {
       const [post] = await db.select().from(posts).where(eq(posts.id, 3));
       const res = html(`<h1>${post?.title ?? "?"}</h1>`);

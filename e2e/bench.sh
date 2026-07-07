@@ -5,14 +5,13 @@
 # container serving the target, so "CPU-ms per request" includes proxy + app.
 #
 # Usage:
-#   docker compose up -d --build
-#   ./bench.sh              # all targets
+#   ./bench.sh              # all targets (starts the stack if needed,
+#                           # tears it down on exit if it started it)
 #   ./bench.sh ols caddy    # specific targets
 #
-# Targets: app (no cache, baseline) | caddy (Souin+otter) | ols (OpenLiteSpeed)
-#          nginx | angie | varnish (+hitch for TLS) | envoy (bench-only:
-#          nginx/angie/varnish/envoy exercise no tag purging here)
-#          caddy-node | caddy-bun
+# Targets: app (no cache, baseline) | ols (OpenLiteSpeed) | caddy (Souin+otter)
+#          | caddy-node | caddy-bun | varnish (+hitch for TLS) | angie
+#          (wildcard URL purging) | nginx (varnish/nginx exercise no purging)
 #
 # Tuning parity (so the comparison is fair):
 #   nginx/angie  worker_processes auto, cache on /dev/shm (tmpfs), upstream
@@ -27,6 +26,15 @@ export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PAT
 cd "$(dirname "$0")"
 NET="drizzle-page-cache-e2e_default"
 PREFIX="drizzle-page-cache-e2e"
+
+# Stack lifecycle — own what you start: if the compose stack is not running,
+# start it and tear it down on exit; a manually started stack is left alone.
+if [ -z "$(docker compose ps -q --status running 2>/dev/null)" ]; then
+  echo "== stack not running — starting it (and tearing it down on exit) =="
+  trap 'echo "== tearing down the stack this run started =="; docker compose down' EXIT INT TERM
+  docker compose up -d --build
+  sleep 3 # proxies without healthchecks need a beat after their apps go healthy
+fi
 VUS="${VUS:-8}"
 DURATION="${DURATION:-30s}"
 OUT="bench-results"
@@ -35,15 +43,14 @@ mkdir -p "$OUT"
 containers_for() {
   case "$1" in
     app) echo "$PREFIX-app-1" ;;
+    ols) echo "$PREFIX-ols-1 $PREFIX-app-ols-1" ;;
     caddy) echo "$PREFIX-caddy-1 $PREFIX-app-1" ;;
     caddy-node) echo "$PREFIX-caddy-node-1 $PREFIX-app-node-1" ;;
     caddy-bun) echo "$PREFIX-caddy-bun-1 $PREFIX-app-bun-1" ;;
-    ols) echo "$PREFIX-ols-1 $PREFIX-app-ols-1" ;;
-    nginx) echo "$PREFIX-nginx-1 $PREFIX-app-1" ;;
-    angie) echo "$PREFIX-angie-1 $PREFIX-app-1" ;;
     varnish) echo "$PREFIX-varnish-1 $PREFIX-app-1" ;;
     varnish-tls) echo "$PREFIX-hitch-1 $PREFIX-varnish-1 $PREFIX-app-1" ;;
-    envoy) echo "$PREFIX-envoy-1 $PREFIX-app-1" ;;
+    angie) echo "$PREFIX-angie-1 $PREFIX-app-angie-1" ;;
+    nginx) echo "$PREFIX-nginx-1 $PREFIX-app-1" ;;
     *) echo "unknown target: $1" >&2; exit 1 ;;
   esac
 }
@@ -151,8 +158,8 @@ bench_one() {
   ' "$OUT/$label.json" "$cpu_before" "$cpu_after" "$mem_before" "$mem_after" "$mem_peak" "$label" "$OUT"
 }
 
-TARGETS=("${@:-app caddy ols nginx angie varnish envoy}")
-[ $# -eq 0 ] && TARGETS=(app caddy ols nginx angie varnish envoy)
+TARGETS=("${@:-app ols caddy varnish angie nginx}")
+[ $# -eq 0 ] && TARGETS=(app ols caddy varnish angie nginx)
 for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
   if [ "$t" = "app" ]; then
     # Direct app = the no-proxy baseline for both scenarios.
