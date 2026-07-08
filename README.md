@@ -37,8 +37,9 @@ const db = pageCache.wrap(drizzle(client, { schema }));
 export default { fetch: pageCache.middleware(app.fetch) };
 ```
 
-Every cacheable response (by default: `GET`, 2xx, path not under `/admin`) now
-carries:
+Every cacheable response (by default: `GET`, 2xx, path not under `/admin`, and
+carrying no `Set-Cookie` or `private`/`no-store`/`no-cache` in `Cache-Control` —
+so personalized responses are never promoted to a shared cache) now carries:
 
 ```
 Surrogate-Key: posts:7 users
@@ -70,6 +71,11 @@ pages):
 pageCache.tag("posts:7"); // add a tag to the current request
 pageCache.purgeTags("posts"); // trigger a purge manually
 ```
+
+Writes the facade can't observe structurally — `db.batch([...])` and
+root-level raw execution (`db.execute`/`db.run` with a raw `sql` statement) —
+emit an `unobserved-write` event (and `db.batch` over-purges the `*` bucket).
+Pair them with `pageCache.purgeTags(...)` so their invalidations are precise.
 
 ## Purgers
 
@@ -237,6 +243,11 @@ Semantics worth knowing:
   client it is; `BYPASS` means exactly "a purge evicted this".
 - **`proxy_cache_key` must be declared as `$uri$is_args$args`** — the Lua helper
   mirrors that exact key string.
+- **Purge marks self-expire after `$dpc_tag_ttl` (default 86400s).** This
+  ceiling MUST exceed your longest `ttl` + `staleWhileRevalidate`, or a mark can
+  expire before the entry it should evict → silent staleness. If you raise `ttl`
+  past a day, `set $dpc_tag_ttl <seconds>` in the purge and serve locations.
+  (Fastly and other tag-native `Surrogate-Key` CDNs have no such limit.)
 - `proxy_hide_header Surrogate-Key` is fine (recommended in production — tags
   leak schema names): the log phase reads the upstream header, not the
   client-facing one.

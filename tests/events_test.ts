@@ -104,6 +104,39 @@ Deno.test("header-overflow collapses row tags to table tags and emits", async ()
   assertEquals(events.filter((e) => e.kind === "header-overflow").length, 1);
 });
 
+Deno.test("maxHeaderBytes measures bytes, not UTF-16 code units", async () => {
+  const events: PageCacheEvent[] = [];
+  const pageCache = createPageCache({
+    schema,
+    purge: new RecordingPurger(),
+    maxHeaderBytes: 12,
+    onEvent: (e) => events.push(e),
+  });
+  const handler = pageCache.middleware(() => {
+    // "posts:日本語" is 9 code units but 15 UTF-8 bytes. A char-count check
+    // (9 <= 12) would let it through; a byte-count check (15 > 12) overflows.
+    pageCache.tag("posts:日本語");
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  assertEquals(res.headers.get("Surrogate-Key"), "posts");
+  assertEquals(events.filter((e) => e.kind === "header-overflow").length, 1);
+});
+
+Deno.test("header-overflow falls back to wildcard when table tags still overflow", async () => {
+  const pageCache = createPageCache({
+    schema,
+    purge: new RecordingPurger(),
+    maxHeaderBytes: 3,
+  });
+  const handler = pageCache.middleware(() => {
+    pageCache.tag("posts:7"); // collapses to "posts" (5 bytes), still > 3
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  assertEquals(res.headers.get("Surrogate-Key"), "*");
+});
+
 Deno.test("debug: true exposes X-Cache-Tags even on excluded paths", async () => {
   const base = createTestContext();
   const pageCache = createPageCache({

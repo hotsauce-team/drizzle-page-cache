@@ -66,7 +66,11 @@ export interface PageCacheOptions {
   };
   /** Path prefixes never tagged/cached. Default ['/admin']. */
   exclude?: string[];
-  /** Full override of the cacheability predicate. */
+  /** Full override of the cacheability predicate. The default caches only
+   * `GET` 2xx responses on non-excluded paths that carry NO `Set-Cookie` and
+   * no `private`/`no-store`/`no-cache` in `Cache-Control` — so personalized
+   * responses are never promoted to a shared cache. Override to widen or
+   * narrow this. */
   shouldTag?: (req: Request, res: Response) => boolean;
   /** Debounce window for purge batching, ms. Default 50. */
   settleMs?: number;

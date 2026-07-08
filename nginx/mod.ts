@@ -8,6 +8,10 @@
  * config in `e2e/nginx/nginx.conf` and the full dialect docs on
  * `../surrogate-key/mod.ts`.
  *
+ * If you raise `ttl` past a day, also raise `$dpc_tag_ttl` in the nginx
+ * config — purge marks self-expire after it (default 86400s) and it MUST
+ * exceed your longest `ttl` + `staleWhileRevalidate`.
+ *
  * ```ts
  * import { createPageCache } from "drizzle-page-cache/nginx";
  *

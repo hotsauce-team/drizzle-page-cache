@@ -1,6 +1,14 @@
 import { assertEquals } from "@std/assert";
-import { eq } from "drizzle-orm";
-import { createTestContext, posts, tagsFor, users } from "./helpers.ts";
+import { eq, or } from "drizzle-orm";
+import { type FacadeContext, wrapDb } from "../facade.ts";
+import { analyzeSchema, WILDCARD } from "../derive.ts";
+import {
+  createTestContext,
+  posts,
+  schema,
+  tagsFor,
+  users,
+} from "./helpers.ts";
 
 Deno.test("entity read by PK → row tag only", async () => {
   const { db, pageCache } = createTestContext();
@@ -46,6 +54,29 @@ Deno.test("join adds the joined table tag", async () => {
       .limit(3);
   });
   assertEquals(tags, ["posts", "users"]);
+});
+
+Deno.test("entity matched by the non-PK arm of an OR tags the row's real PK", async () => {
+  const { db, pageCache } = createTestContext();
+  const tags = await tagsFor(pageCache, async () => {
+    // The PK arm (id=999) does not match; the unique arm (email) does →
+    // the row returned is user 2, so the tag must be users:2, not users:999.
+    const rows = await db.select().from(users).where(
+      or(eq(users.id, 999), eq(users.email, "user2@example.com")),
+    );
+    assertEquals(rows.length, 1);
+    assertEquals((rows[0] as { id: number }).id, 2);
+  });
+  assertEquals(tags, ["users:2"]);
+});
+
+Deno.test("partial select by PK stays row-precise when it is unambiguous", async () => {
+  const { db, pageCache } = createTestContext();
+  const tags = await tagsFor(pageCache, async () => {
+    // PK omitted from the result, but a single PK equality constrained it.
+    await db.select({ title: posts.title }).from(posts).where(eq(posts.id, 5));
+  });
+  assertEquals(tags, ["posts:5"]);
 });
 
 Deno.test("partial select omitting the PK degrades to table tag", async () => {
@@ -126,6 +157,31 @@ Deno.test("delete by PK purges row + table tags", async () => {
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
   assertEquals(purger.all, ["posts", "posts:9"]);
+});
+
+Deno.test("db.batch() is treated as an opaque write (warn + wildcard purge)", async () => {
+  const events: string[] = [];
+  const purged: string[] = [];
+  const ctx: FacadeContext = {
+    info: analyzeSchema(schema),
+    addTags: () => {},
+    schedulePurge: (tags) => {
+      for (const t of tags) purged.push(t);
+    },
+    emit: (kind) => events.push(kind),
+  };
+  let called = false;
+  const fakeDb = {
+    batch: (_stmts: unknown[]) => {
+      called = true;
+      return Promise.resolve([]);
+    },
+  };
+  const wrapped = wrapDb(fakeDb, ctx);
+  await wrapped.batch([1, 2]);
+  assertEquals(called, true);
+  assertEquals(events, ["unobserved-write"]);
+  assertEquals(purged, [WILDCARD]);
 });
 
 Deno.test("update by non-PK column purges table tag (no false row precision)", async () => {

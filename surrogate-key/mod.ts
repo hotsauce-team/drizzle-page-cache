@@ -53,6 +53,11 @@
  *   means exactly "a purge evicted this";
  * - `proxy_cache_key` MUST be declared as `$uri$is_args$args` — `purge.lua`
  *   mirrors that exact key string.
+ * - purge marks self-expire after `$dpc_tag_ttl` (default 86400s). This
+ *   ceiling MUST exceed your longest `ttl` + `staleWhileRevalidate`, or a
+ *   mark can expire before the entry it should evict → silent staleness.
+ *   If you raise `ttl` past a day, set `$dpc_tag_ttl` accordingly in the
+ *   nginx/Angie config (Fastly and other Surrogate-Key CDNs are unaffected).
  *
  * For a custom purger, drop down to the root `createPageCache`.
  */

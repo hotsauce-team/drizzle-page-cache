@@ -53,7 +53,9 @@
 --   http {
 --     # Tag -> generation purge marks. Eviction here would silently drop
 --     # a purge record (stale until TTL), so size it generously; entries
---     # self-expire after TAG_TTL.
+--     # self-expire after $dpc_tag_ttl (default 86400s). If your page `ttl`
+--     # + `staleWhileRevalidate` can exceed a day, raise it in BOTH the
+--     # purge and serve locations: `set $dpc_tag_ttl 172800;`.
 --     lua_shared_dict dpc_tags 4m;
 --     # Cache key -> stored generation + tags. Eviction/expiry only costs
 --     # an extra bypass, so LRU pressure is safe.
@@ -97,8 +99,13 @@ local GEN_KEY = "gen"
 local ALL_KEY = "all"
 -- Tag marks self-expire: a purge only matters for entries stored before
 -- it, and no entry outlives its own s-maxage + stale-while-revalidate.
--- MUST exceed your longest page TTL + SWR or expired marks serve stale.
-local TAG_TTL = 86400
+-- This ceiling MUST exceed your longest page TTL + SWR or expired marks
+-- serve stale. Override per deployment with `set $dpc_tag_ttl <seconds>`
+-- in the purge/serve locations when you raise `ttl` past the default day.
+local DEFAULT_TAG_TTL = 86400
+local function tag_ttl()
+  return tonumber(ngx.var.dpc_tag_ttl) or DEFAULT_TAG_TTL
+end
 -- Safety margin on key records beyond the entry's own freshness lifetime.
 local KEY_TTL_SLACK = 60
 
@@ -121,7 +128,7 @@ local function reply(status, body)
 end
 
 local function mark(tags_dict, dict_key, gen)
-  local ok, err, forcible = tags_dict:set(dict_key, gen, TAG_TTL)
+  local ok, err, forcible = tags_dict:set(dict_key, gen, tag_ttl())
   if not ok then
     ngx.log(ngx.ERR, "dpc purge: mark set failed: ", err)
     return false

@@ -53,6 +53,20 @@ export function wrapDb<TDb>(db: TDb, ctx: FacadeContext): TDb {
         case "transaction":
           return (fn: Any, config: Any) =>
             runTransaction(target, fn, config, ctx);
+        case "batch":
+          // Root-level batch (sqlite-proxy / libsql / D1 / neon-http) runs an
+          // opaque array of statements — possibly writes — that never flow
+          // through the builder taps. Treat it like a write against an
+          // unknown target: warn loudly and over-purge the wildcard bucket
+          // (safe direction) rather than silently missing invalidation.
+          return (...args: Any[]) => {
+            ctx.emit(
+              "unobserved-write",
+              "db.batch() is opaque — call purgeTags() for its writes",
+            );
+            ctx.schedulePurge([WILDCARD]);
+            return target.batch(...args);
+          };
         default: {
           const value = Reflect.get(target, prop, receiver);
           return typeof value === "function" ? value.bind(target) : value;
@@ -167,7 +181,15 @@ function readTags(
     // insert invalidates a cached 404.
     const pkKey = info.pkKeyByTable.get(primary);
     const row = rows[0] as Record<string, unknown> | undefined;
-    const pkValue = unique.viaPk ? unique.value : row?.[pkKey ?? ""];
+    // The returned row's own PK is authoritative. Only fall back to the WHERE
+    // param when there's no row (a miss — the intended row tag is still
+    // meaningful for a cached 404) or a single unambiguous unique equality
+    // (no OR/multi-eq that could have matched the row via a different arm).
+    const fromRow = row?.[pkKey ?? ""];
+    const pkValue = fromRow ??
+      (unique.viaPk && (rows.length === 0 || uniques.length === 1)
+        ? unique.value
+        : undefined);
     if (pkValue !== undefined) {
       tags.add(rowTag(primary, pkValue));
       if (rows.length === 0) tags.add(primary);

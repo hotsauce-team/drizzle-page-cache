@@ -1,6 +1,7 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { eq } from "drizzle-orm";
-import { createTestContext, posts } from "./helpers.ts";
+import { createPageCache } from "../page_cache.ts";
+import { createTestContext, posts, RecordingPurger, schema } from "./helpers.ts";
 
 Deno.test("cacheable GET gets Surrogate-Key and Cache-Control headers", async () => {
   const { db, pageCache } = createTestContext();
@@ -36,6 +37,55 @@ Deno.test("error responses are never tagged", async () => {
   });
   const res = await handler(new Request("http://localhost/x"));
   assertEquals(res.headers.get("Surrogate-Key"), null);
+});
+
+Deno.test("GET with Set-Cookie is not tagged (personalized response)", async () => {
+  const { db, pageCache } = createTestContext();
+  const handler = pageCache.middleware(async () => {
+    await db.select().from(posts).where(eq(posts.id, 3));
+    return new Response("hi", { headers: { "Set-Cookie": "sid=abc" } });
+  });
+  const res = await handler(new Request("http://localhost/post/3"));
+  assertEquals(res.headers.get("Surrogate-Key"), null);
+  assertEquals(res.headers.get("Cache-Control"), null);
+});
+
+Deno.test("GET with Cache-Control: private is not tagged", async () => {
+  const { db, pageCache } = createTestContext();
+  const handler = pageCache.middleware(async () => {
+    await db.select().from(posts).where(eq(posts.id, 3));
+    return new Response("hi", {
+      headers: { "Cache-Control": "private, max-age=60" },
+    });
+  });
+  const res = await handler(new Request("http://localhost/post/3"));
+  assertEquals(res.headers.get("Surrogate-Key"), null);
+  // the app's own directive is left untouched
+  assertEquals(res.headers.get("Cache-Control"), "private, max-age=60");
+});
+
+Deno.test("purge-echo route gates on method and token", async () => {
+  const pageCache = createPageCache({
+    schema,
+    purge: new RecordingPurger(),
+    purgeEcho: { token: "s3cret", path: "/__echo" },
+  });
+  const handler = pageCache.middleware(() => new Response("app"));
+
+  const put = await handler(
+    new Request("http://localhost/__echo?token=s3cret", { method: "PUT" }),
+  );
+  assertEquals(put.status, 405);
+  assertEquals(put.headers.get("Allow"), "GET, POST");
+
+  const bad = await handler(new Request("http://localhost/__echo?token=nope"));
+  assertEquals(bad.status, 403);
+
+  const ok = await handler(
+    new Request("http://localhost/__echo?token=s3cret&tags=posts:1"),
+  );
+  assertEquals(ok.status, 200);
+  assertEquals(ok.headers.get("X-LiteSpeed-Purge"), "tag=posts:1");
 });
 
 Deno.test("excluded paths (default /admin) are never tagged", async () => {

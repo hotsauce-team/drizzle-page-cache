@@ -9,6 +9,20 @@ import type {
   PageCacheOptions,
 } from "./types.ts";
 
+/** Length-independent string comparison — avoids a timing oracle on the
+ * shared purge token. Zero-dep (no node:crypto), Web-standard only. */
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  // Fold the length difference into the accumulator so mismatched lengths
+  // still take the same code path.
+  let diff = ab.length ^ bb.length;
+  const len = Math.max(ab.length, bb.length);
+  for (let i = 0; i < len; i++) diff |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  return diff === 0;
+}
+
 export function createPageCache(options: PageCacheOptions): PageCache {
   const header = options.header ?? "Surrogate-Key";
   const separator = options.headerSeparator ?? " ";
@@ -29,6 +43,14 @@ export function createPageCache(options: PageCacheOptions): PageCache {
   const shouldTag = options.shouldTag ??
     ((req: Request, res: Response) => {
       if (req.method !== "GET" || !res.ok) return false;
+      // Respect the app's own non-shareable signals — otherwise the header
+      // stamping below would turn a personalized GET into a shared-cache
+      // entry. Mirrors what the Lua log() phase refuses to store.
+      if (res.headers.has("Set-Cookie")) return false;
+      const cc = res.headers.get("Cache-Control")?.toLowerCase() ?? "";
+      if (/(^|[\s,])(private|no-store|no-cache)([\s,;]|$)/.test(cc)) {
+        return false;
+      }
       const path = new URL(req.url).pathname;
       return !exclude.some((p) =>
         path === p || path.startsWith(p.endsWith("/") ? p : `${p}/`)
@@ -129,7 +151,13 @@ export function createPageCache(options: PageCacheOptions): PageCache {
         if (echo !== undefined) {
           const url = new URL(req.url);
           if (url.pathname === echo.path) {
-            if (url.searchParams.get("token") !== echo.token) {
+            if (req.method !== "GET" && req.method !== "POST") {
+              return new Response("method not allowed", {
+                status: 405,
+                headers: { "Allow": "GET, POST" },
+              });
+            }
+            if (!timingSafeEqual(url.searchParams.get("token") ?? "", echo.token)) {
               return new Response("forbidden", { status: 403 });
             }
             const tags = (url.searchParams.get("tags") ?? "")
@@ -152,18 +180,25 @@ export function createPageCache(options: PageCacheOptions): PageCache {
 
         const out = new Response(res.body, res);
         if (options.debug) {
-          out.headers.set("X-Cache-Tags", [...tags].join(" "));
+          out.headers.set("X-Cache-Tags", [...tags].join(separator));
         }
         if (cacheable) {
+          const enc = new TextEncoder();
           let value = [...tags].join(separator);
-          if (value.length > maxHeaderBytes) {
-            const collapsed = collapse(tags);
+          if (enc.encode(value).length > maxHeaderBytes) {
             emit({
               kind: "header-overflow",
               count: tags.size,
               path: new URL(req.url).pathname,
             });
-            value = collapsed.join(separator);
+            value = collapse(tags).join(separator);
+            // Even the collapsed table-tag set overflows — dropping any tag
+            // would be the dangerous direction (a write to that table would
+            // miss this page), so fall back to the wildcard bucket, which
+            // every purge reaches. Safe over-purge.
+            if (enc.encode(value).length > maxHeaderBytes) {
+              value = withPrefix(WILDCARD);
+            }
           }
           out.headers.set(header, value);
           out.headers.set(

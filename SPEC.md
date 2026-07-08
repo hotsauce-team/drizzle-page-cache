@@ -50,7 +50,9 @@ Deno/Node/Bun (Workers via `nodejs_compat`).
 - **Request scope**: `AsyncLocalStorage`, opened by
   `pageCache.middleware(handler)`.
 - **Headers** (only when `shouldTag(req, res)` passes; default `GET` && 2xx &&
-  path not excluded): `Surrogate-Key: <tags>` and
+  path not excluded && no `Set-Cookie` && no `private`/`no-store`/`no-cache` in
+  `Cache-Control` — the app's non-shareable signals win): `Surrogate-Key: <tags>`
+  and
   `Cache-Control: max-age=0, s-maxage=<ttl>, stale-while-revalidate=<n>`.
   `max-age=0` is non-negotiable — browsers cannot be purged.
 - **Purge queue**: deduplicated, debounced (`settleMs`); **transaction-aware** —
