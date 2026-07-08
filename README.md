@@ -72,10 +72,13 @@ pageCache.tag("posts:7"); // add a tag to the current request
 pageCache.purgeTags("posts"); // trigger a purge manually
 ```
 
-Writes the facade can't observe structurally — `db.batch([...])` and
-root-level raw execution (`db.execute`/`db.run` with a raw `sql` statement) —
-emit an `unobserved-write` event (and `db.batch` over-purges the `*` bucket).
-Pair them with `pageCache.purgeTags(...)` so their invalidations are precise.
+`db.batch([...])` is observed too: it derives purges from its statements, so a
+batch of recognized writes purges exactly their tags (reads in a batch need
+none). Only a statement the facade can't read structurally — a raw `sql`
+statement, a relational-query builder, or a builder made on the *unwrapped* db —
+falls back to the `*` bucket with an `unobserved-write` warning. Root-level raw
+execution (`db.execute`/`db.run` with a raw `sql` statement) is likewise opaque;
+pair those with `pageCache.purgeTags(...)`.
 
 ## Purgers
 

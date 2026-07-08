@@ -70,24 +70,28 @@ export function createTestContext(options: { settleMs?: number } = {}) {
     insertPost.run(`Post ${i}`, `Body ${i}`, ((i - 1) % 3) + 1);
   }
 
+  // sqlite-proxy expects an async callback; node:sqlite itself is sync.
+  // deno-lint-ignore require-await
+  const run1 = async (query: string, params: unknown[], method: string) => {
+    const stmt = sqlite.prepare(query);
+    if (method === "run") {
+      stmt.run(...(params as never[]));
+      return { rows: [] };
+    }
+    if (method === "get") {
+      const row = stmt.get(...(params as never[]));
+      return { rows: row ? Object.values(row) : [] };
+    }
+    const rows = stmt.all(...(params as never[]));
+    return {
+      rows: rows.map((r) => Object.values(r as Record<string, unknown>)),
+    };
+  };
   const raw = drizzle(
-    // sqlite-proxy expects an async callback; node:sqlite itself is sync
-    // deno-lint-ignore require-await
-    async (query: string, params: unknown[], method: string) => {
-      const stmt = sqlite.prepare(query);
-      if (method === "run") {
-        stmt.run(...(params as never[]));
-        return { rows: [] };
-      }
-      if (method === "get") {
-        const row = stmt.get(...(params as never[]));
-        return { rows: row ? Object.values(row) : [] };
-      }
-      const rows = stmt.all(...(params as never[]));
-      return {
-        rows: rows.map((r) => Object.values(r as Record<string, unknown>)),
-      };
-    },
+    run1,
+    // batch callback: run each query in order and return their results.
+    (queries: { sql: string; params: unknown[]; method: string }[]) =>
+      Promise.all(queries.map((q) => run1(q.sql, q.params, q.method))),
     { schema },
   );
 

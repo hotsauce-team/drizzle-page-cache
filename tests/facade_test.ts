@@ -159,7 +159,7 @@ Deno.test("delete by PK purges row + table tags", async () => {
   assertEquals(purger.all, ["posts", "posts:9"]);
 });
 
-Deno.test("db.batch() is treated as an opaque write (warn + wildcard purge)", async () => {
+Deno.test("db.batch() of fully-opaque statements warns + wildcard-purges", async () => {
   const events: string[] = [];
   const purged: string[] = [];
   const ctx: FacadeContext = {
@@ -182,6 +182,39 @@ Deno.test("db.batch() is treated as an opaque write (warn + wildcard purge)", as
   assertEquals(called, true);
   assertEquals(events, ["unobserved-write"]);
   assertEquals(purged, [WILDCARD]);
+});
+
+Deno.test("db.batch of observed writes purges precise tags (no wildcard)", async () => {
+  const { db, pageCache, purger } = createTestContext();
+  await db.batch([
+    db.update(posts).set({ title: "a" }).where(eq(posts.id, 3)),
+    db.insert(posts).values({ title: "n", body: "b", authorId: 1 }),
+  ]);
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  assertEquals(purger.all, ["posts", "posts:3"]);
+});
+
+Deno.test("db.batch with an unobservable statement adds the wildcard bucket", async () => {
+  const { db, raw, pageCache, purger } = createTestContext();
+  await db.batch([
+    db.update(posts).set({ title: "a" }).where(eq(posts.id, 3)), // observed
+    raw.update(users).set({ name: "x" }).where(eq(users.id, 1)), // opaque
+  ]);
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  assertEquals(purger.all, ["*", "posts", "posts:3"]);
+});
+
+Deno.test("db.batch of reads only needs no purge", async () => {
+  const { db, pageCache, purger } = createTestContext();
+  await db.batch([
+    db.select().from(posts).where(eq(posts.id, 3)),
+    db.select().from(users).limit(2),
+  ]);
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  assertEquals(purger.all, []);
 });
 
 Deno.test("update by non-PK column purges table tag (no false row precision)", async () => {
