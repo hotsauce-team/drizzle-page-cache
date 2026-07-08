@@ -4,10 +4,10 @@ Tag-based HTTP page-cache invalidation for
 [Drizzle ORM](https://orm.drizzle.team) apps.
 
 Put any Drizzle app behind a tag-aware HTTP cache (OpenLiteSpeed, Caddy/Souin,
-Varnish xkey, Fastly — or URL-purge proxies like Angie/nginx) and get
-**automatic, event-driven invalidation**: cache tags are derived from the
-queries each request actually executes, emitted as a `Surrogate-Key` response
-header, and purged when writes touch the same tables or rows.
+Varnish xkey, Fastly — or plain nginx/Angie made tag-aware by this package's Lua
+helper) and get **automatic, event-driven invalidation**: cache tags are derived
+from the queries each request actually executes, emitted as a `Surrogate-Key`
+response header, and purged when writes touch the same tables or rows.
 
 - **Zero dependencies** (peer: `drizzle-orm`). Web-standard `Request`/`Response`
   only.
@@ -74,12 +74,75 @@ pageCache.purgeTags("posts"); // trigger a purge manually
 ## Purgers
 
 Each supported cache has a directory entrypoint — drizzle-adapter style — that
-wires its purger from a `site` URL: `drizzle-page-cache/litespeed`
-(OpenLiteSpeed, see below), `/souin` (Caddy cache-handler), `/varnish` (xkey),
-`/angie` (nginx-family wildcard URL purge, see below). For anything else, use
-the root `createPageCache` with a purger — built in: `litespeedPurger`,
-`souinPurger`, `varnishPurger`, `angiePurger`, `webhookPurger` — or implement
-`Purger` (one method) for your CDN.
+wires its purger from a `site` URL. Entrypoints are named by **wire dialect**,
+with product aliases for discoverability:
+
+- `drizzle-page-cache/surrogate-key` — `Surrogate-Key` header + a `POST` purge
+  endpoint (the wire shape of Fastly's batch purge API; also serves any CDN that
+  accepts it). Product aliases: `/nginx` and `/angie` (nginx family made
+  tag-aware by this package's Lua helper, see below).
+- `drizzle-page-cache/xkey` — `xkey` header + `PURGE`. Product alias:
+  `/varnish`.
+- `drizzle-page-cache/souin` — Souin's API (Caddy cache-handler).
+- `drizzle-page-cache/litespeed` — OpenLiteSpeed's header-driven dialect (see
+  below).
+
+For anything else, use the root `createPageCache` with a purger — built in:
+`litespeedPurger`, `souinPurger`, `varnishPurger`, `nginxPurger`,
+`webhookPurger` — or implement `Purger` (one method) for your CDN.
+
+### Souin / Caddy
+
+Souin is tag-native — there is nothing to add to the proxy except its purge
+**API, which you must enable server-side**. In a Caddyfile:
+
+```
+{
+  order cache before rewrite
+  cache {
+    ttl 300s
+    api { souin }   # exposes the purge API at /souin-api/souin
+  }
+}
+:80 {
+  cache
+  reverse_proxy your-app:8000
+}
+```
+
+The entrypoint (`site`, plus `apiPath` — default `/souin-api/souin`) sends one
+`PURGE` there with the tags in a `Surrogate-Key` header. If you drive Caddy by
+its **JSON** config (API/`caddy adapt`) rather than a Caddyfile, the
+cache-handler plugin needs the API turned on there too — see BENCHMARKS.md
+findings 1–2 for the patched-JSON caveat. Working config: `e2e/Caddyfile`
+(adapted to `e2e/caddy.json` by `gen-caddy-json.sh`); the write → tag-purge loop
+is verified by `e2e/verify.sh caddy` (and `caddy-node`, `caddy-bun`).
+
+### Varnish (xkey)
+
+The entrypoint sends one `PURGE` to `site` with the tags in an `xkey` header, so
+your VCL needs the **xkey vmod** and a PURGE handler:
+
+```vcl
+vcl 4.1;
+import xkey;
+
+sub vcl_recv {
+  if (req.method == "PURGE") {
+    # invalidate every object tagged with any key in the xkey header
+    set req.http.n-purged = xkey.purge(req.http.xkey);
+    return (synth(200, "Purged " + req.http.n-purged));
+  }
+}
+```
+
+Guard `PURGE` with an ACL in production — Varnish applies no auth to it.
+**Caveat: this purge path is not exercised by the e2e suite.** Varnish is a
+benchmark-only pairing here (`e2e/varnish/default.vcl` caches for the hit/TLS
+benches but implements no xkey purging), so — unlike nginx/Angie/OLS/Souin —
+there is no `verify.sh` proof of the write → purge loop against Varnish. The
+purger and header shape are unit-tested (`tests/entrypoints_test.ts`), and the
+VCL above is standard xkey usage, but validate it in your environment.
 
 ### LiteSpeed / OpenLiteSpeed
 
@@ -133,80 +196,82 @@ createPageCache({
 Note OpenLiteSpeed batches purges internally, so eviction is
 eventually-consistent by a few seconds. Working OLS server config in `e2e/ols/`.
 
-### nginx-family (Angie / free nginx): URL wildcard purging
+### nginx-family (free nginx / Angie): tag purging via Lua
 
-The nginx family has no open-source tag support, but its cache-purge module
-accepts a trailing `*` — so the angie entrypoint maps each tag to URL patterns
-you declare and purges by prefix instead:
+Stock nginx has no tag support — this package ships
+[`nginx/purge.lua`](nginx/purge.lua) to add it, so purging is exactly as
+row-precise as on the tag-native proxies and there is nothing to declare:
 
 ```ts
-import { createPageCache } from "drizzle-page-cache/angie";
+import { createPageCache } from "drizzle-page-cache/nginx"; // or /angie — identical
 
 const pageCache = createPageCache({
   schema,
-  site: "http://angie",
-  routes: { posts: ["/", "/post/*"] }, // a write to posts clears the list + every post page
+  site: "http://nginx",
 });
 ```
 
-**Building the `routes` object.** Keys are tags, values are the URL patterns to
-PURGE when that tag is invalidated. A purged tag is looked up in three steps —
-the exact tag (`"posts:7"`), then its table (`"posts"`, everything before the
-`:`), then the `"*"` fallback — and the first match wins; tags matching no entry
-are skipped. In practice **one key per table (plus one per manual tag you emit)
-is all you need**: row tags like `posts:7` fall back to the `posts` entry
-anyway, because URL purging can't hit a single row's pages any more precisely
-than their shared prefix. For each table, list every page whose content depends
-on it — index/list pages as exact paths, detail pages as a prefix wildcard:
+How it works: the middleware already stamps every cacheable response with its
+tags (`Surrogate-Key: posts posts:3`). The Lua `log` phase records each cache
+key's tags in a `lua_shared_dict` whenever nginx stores a response. A purge is
+one `POST <site>/__dpc/purge` with the invalidated tags in a `Surrogate-Key`
+header — the wire shape of Fastly's batch purge API — and later requests whose
+recorded tags were purged set `$skip_cache` for `proxy_cache_bypass`, refreshing
+the entry from upstream. The endpoint (its own nginx `location`) also serves
+Fastly-style `POST /__dpc/purge/<tag>` and `POST /__dpc/purge_all` for curl and
+ops tooling, with `PURGE` accepted as a method alias.
 
-```ts
-routes: {
-  // pages that render posts: the list pages exactly, the detail pages by prefix
-  posts: ["/", "/blog", "/post/*"],
-  // users appear on their profile pages AND inside every post page
-  users: ["/author/*", "/post/*"],
-  // a MANUAL tag (pageCache.tag("settings")) — the exact-tag step in action;
-  // don't enumerate row tags like "posts:7" (the table key covers them)
-  settings: ["/", "/about"],
-  // fallback for any other manual/unknown tags; omit to skip them
-  "*": ["/*"],
-},
-```
+It runs on any nginx with lua-nginx-module — distro packages (Alpine
+`nginx-mod-http-lua`, Debian/Ubuntu `libnginx-mod-http-lua`), OpenResty, or
+Angie's official `angie-module-lua` — two `load_module` lines and two location
+blocks (full config in the file header). No compiling.
 
-A trailing `*` purges every cache entry sharing that prefix (query-string
-variants included); a path without `*` purges exactly one entry. Over-listing is
-safe — an unnecessary purge costs one re-render; a missing pattern serves stale
-pages until the TTL backstop expires.
+Semantics worth knowing:
 
-Know the limitations before choosing this route:
+- **A purge marks entries stale rather than deleting them** — eviction happens
+  on the next request (`X-Cache-Status: BYPASS`), not at purge time.
+- **Unknown keys are refreshed, never trusted**: a cache key the shared dicts
+  don't know (first sight, proxy restart, dict eviction) is fetched fresh and
+  re-recorded — stale-proof even when a disk cache outlives a restart, at the
+  cost of one upstream fetch. It reads `X-Cache-Status: MISS`, which to the
+  client it is; `BYPASS` means exactly "a purge evicted this".
+- **`proxy_cache_key` must be declared as `$uri$is_args$args`** — the Lua helper
+  mirrors that exact key string.
+- `proxy_hide_header Surrogate-Key` is fine (recommended in production — tags
+  leak schema names): the log phase reads the upstream header, not the
+  client-facing one.
+- Purges only enter through the dedicated endpoint location — guard that one
+  block with `allow`/`deny` and/or `set $dpc_purge_token "…"` (clients must then
+  send a matching `X-Purge-Token`; the entrypoint's `purgeToken` option does).
+  The e2e configs leave it open on purpose.
 
-- **Free nginx can't do this out of the box — you must bundle your own purge
-  module.** Native `proxy_cache_purge` is NGINX-Plus-only, and no official
-  open-source nginx package ships any purge module: you have to compile
-  [`ngx_cache_purge`](https://github.com/nginx-modules/ngx_cache_purge) into
-  your own nginx build (`--add-module`/`--add-dynamic-module`). **Angie ships
-  that same module as an official prebuilt package** (preinstalled in its Docker
-  image) — the practical choice if you won't maintain custom nginx binaries.
-- **The wildcard is a trailing-`*` prefix match on the cache key — nothing
-  more.** No mid-pattern globs, no regex; design your URL space so related pages
-  share a purgeable prefix.
-- **`proxy_cache_key` must be declared explicitly, variable part last** (e.g.
-  `$uri$is_args$args`). Left at the implicit default, caching works but every
-  PURGE silently returns 412 — see
-  [BENCHMARKS.md finding 6](BENCHMARKS.md#findings-the-part-worth-citing).
-- **Purging is coarser than tags**: a write to one row evicts the whole matching
-  prefix (query-string variants included) — an over-purge, which is the safe
-  direction, but budget the re-renders.
+Working server configs in `e2e/nginx/nginx.conf` (Alpine nginx +
+`nginx-mod-http-lua`, built by `e2e/Dockerfile.nginx`) and
+`e2e/nginx/angie.conf` (Angie's lua module); the write → tag-purge loop —
+including row precision (editing post 3 must NOT evict post 2) — is verified by
+`e2e/verify.sh nginx` and `e2e/verify.sh angie`.
 
-Working server config in `e2e/nginx/angie.conf`; the write → wildcard-purge loop
-is verified by `e2e/verify.sh angie`.
+**Second flavor — the LiteSpeed dialect on plain nginx.** The sibling script
+[`nginx/purge_litespeed.lua`](nginx/purge_litespeed.lua) speaks LSCache instead
+of Surrogate-Key: it honors `X-LiteSpeed-Cache-Control` (public/max-age decides
+what nginx stores and for how long), records `X-LiteSpeed-Tag` tags per cache
+key, and executes `X-LiteSpeed-Purge` headers riding any response through the
+proxy (`tag=…`, `url=…`, `*` — LiteSpeed has no PURGE verb). That makes plain
+nginx a public-page-cache backend for anything written for LiteSpeed — including
+WordPress with the
+[LiteSpeed Cache plugin](https://wordpress.org/plugins/litespeed-cache/), and
+this package's own `/litespeed` entrypoint, which the e2e suite runs against it
+UNCHANGED (`e2e/verify.sh nginx-ls`; config in `e2e/nginx/nginx-ls.conf`). Scope
+honesty vs a real LiteSpeed server: public cache only — no private/per-user
+cache (private purges are ignored), no ESI (keep it off in LSCWP), no vary
+beyond bypassing the `_lscache_vary` login cookie, no crawler.
 
 Is it fast? See **[BENCHMARKS.md](BENCHMARKS.md)** — five open-source cache
 stacks measured (hits, uncached passthrough, TLS handshakes) with the bugs we
 found on the way, and `e2e/bench.sh` to rerun everything locally. Short version:
-OLS sits at statistical parity with Varnish, Angie, and nginx on cache hits
-while being the only one with native tags, and leads TLS full handshakes by
-~35%.
+OLS, Varnish, Angie, and nginx sit at statistical parity on cache hits — with
+the Lua tag transport active on the nginx family, so tag purging costs nothing
+measurable — and OLS leads TLS full handshakes.
 
 ## Observability
 
@@ -261,8 +326,8 @@ five-stack cache comparison and findings. The e2e purge loop in `e2e/` passes on
 **OpenLiteSpeed** (header-driven purging via the litespeed entrypoint's
 `purgeEcho` + `litespeedPurger`), on **Caddy/Souin** — same app on Deno, Node
 24, and Bun (the Node entry is a ~40-line `node:http` adapter, Bun needs none,
-and only the demo's sqlite backend differs per runtime) — and on **Angie**
-(wildcard URL purging via the angie entrypoint + the official cache-purge
-module); Varnish + Hitch and nginx are benchmark-only pairings.
+and only the demo's sqlite backend differs per runtime) — and on **Angie** and
+**plain nginx** (tag purging via the nginx/angie entrypoints + the Lua helper
+`nginx/purge.lua`); Varnish + Hitch is a benchmark-only pairing.
 `cd e2e && ./verify.sh all` runs the whole sweep with live step output and a
 PASS/FAIL summary.

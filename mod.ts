@@ -10,8 +10,8 @@
 
 export { createPageCache } from "./page_cache.ts";
 export {
-  angiePurger,
   litespeedPurger,
+  nginxPurger,
   souinPurger,
   varnishPurger,
   webhookPurger,

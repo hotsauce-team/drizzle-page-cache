@@ -9,6 +9,7 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { createPageCache as createSouinPageCache } from "../../souin/mod.ts";
 import { createPageCache as createAngiePageCache } from "../../angie/mod.ts";
+import { createPageCache as createNginxPageCache } from "../../nginx/mod.ts";
 import { createPageCache as createLiteSpeedPageCache } from "../../litespeed/mod.ts";
 import type { Handler } from "../../types.ts";
 
@@ -35,8 +36,10 @@ export type SqliteExec = (
 
 export function createHandler(exec: SqliteExec): Handler {
   // Each PURGE_STYLE dogfoods its directory entrypoint: litespeed
-  // (header-driven purging), angie (tag → URL-pattern wildcard PURGE), and
-  // the default, souin (PURGE API). PURGE_SITE is the proxy's base URL.
+  // (header-driven purging), angie and nginx (tag purging via
+  // nginx/purge.lua — angie through its lua module, nginx through
+  // nginx-mod-http-lua), and the default, souin (PURGE API). PURGE_SITE
+  // is the proxy's base URL.
   const style = process.env.PURGE_STYLE;
   const token = process.env.PURGE_TOKEN ?? "e2e-secret";
 
@@ -54,9 +57,13 @@ export function createHandler(exec: SqliteExec): Handler {
       ttl: 300,
       settleMs: 10,
       site: process.env.PURGE_SITE ?? "http://angie",
-      // Any write to posts purges the list page and every /post/* entry —
-      // URL-pattern purging is coarser than tags by design.
-      routes: { posts: ["/", "/post/*"] },
+    })
+    : style === "nginx"
+    ? createNginxPageCache({
+      schema,
+      ttl: 300,
+      settleMs: 10,
+      site: process.env.PURGE_SITE ?? "http://nginx",
     })
     : createSouinPageCache({
       schema,

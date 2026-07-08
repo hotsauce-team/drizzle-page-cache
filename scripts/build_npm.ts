@@ -12,8 +12,11 @@ await build({
     "./mod.ts",
     { name: "./litespeed", path: "./litespeed/mod.ts" },
     { name: "./souin", path: "./souin/mod.ts" },
+    { name: "./surrogate-key", path: "./surrogate-key/mod.ts" },
+    { name: "./xkey", path: "./xkey/mod.ts" },
     { name: "./varnish", path: "./varnish/mod.ts" },
     { name: "./angie", path: "./angie/mod.ts" },
+    { name: "./nginx", path: "./nginx/mod.ts" },
   ],
   outDir: "./npm",
   shims: { deno: false },
@@ -47,5 +50,13 @@ await build({
   postBuild() {
     Deno.copyFileSync("LICENSE", "npm/LICENSE");
     Deno.copyFileSync("README.md", "npm/README.md");
+    // The nginx entrypoint's Lua companions (not TS entry points):
+    // Surrogate-Key dialect and LiteSpeed dialect.
+    Deno.mkdirSync("npm/nginx", { recursive: true });
+    Deno.copyFileSync("nginx/purge.lua", "npm/nginx/purge.lua");
+    Deno.copyFileSync(
+      "nginx/purge_litespeed.lua",
+      "npm/nginx/purge_litespeed.lua",
+    );
   },
 });

@@ -58,38 +58,36 @@ export function varnishPurger(url: string): Purger {
   };
 }
 
+/** Default route of the Lua purge endpoint (`nginx/purge.lua`). The API is
+ * Fastly-shaped: `POST <path>` with `Surrogate-Key: tag1 tag2` (batch —
+ * what this purger sends), `POST <path>/<tag>` (single), and
+ * `POST <path>_all` (flush). */
+export const DEFAULT_NGINX_PURGE_PATH = "/__dpc/purge";
+
 /**
- * Angie / nginx-family (no tag support): map tags to URL patterns and issue
- * wildcard PURGE requests (Angie's cache-purge module supports `/path/*` —
- * a trailing-`*` prefix match on the cache key). The proxy MUST declare
- * `proxy_cache_key` explicitly with the URI part last, or every PURGE
- * silently 412s — see README "nginx-family" and e2e/nginx/angie.conf.
- * The '*' entry is the fallback for unknown tags — omit it to skip them.
+ * nginx family (free nginx, Angie, OpenResty) running this package's
+ * `nginx/purge.lua`: one POST to the proxy's dedicated purge endpoint
+ * carrying the tags in a `Surrogate-Key` header — the same header the
+ * middleware stamps on responses, which the Lua log phase records per
+ * cache key, so purging is tag-precise with no tag → URL mapping. The
+ * endpoint location should be access-restricted; if it sets
+ * `$dpc_purge_token`, pass the matching `token` here.
  */
-export function angiePurger(
+export function nginxPurger(
   base: string,
-  routes: Record<string, string[]>,
+  options?: { path?: string; token?: string },
 ): Purger {
+  const url = base + (options?.path ?? DEFAULT_NGINX_PURGE_PATH);
   return {
     async purge(tags) {
-      const urls = new Set<string>(
-        tags.flatMap((tag) => {
-          const table = tag.includes(":")
-            ? tag.slice(0, tag.indexOf(":"))
-            : tag;
-          return routes[tag] ?? routes[table] ?? routes["*"] ?? [];
-        }),
-      );
-      await Promise.all(
-        [...urls].map(async (path) => {
-          const res = await fetch(base + path, { method: "PURGE" });
-          // "not in cache" is a success: 404, or 412 with the module's
-          // default `cache_purge_legacy_status on`.
-          if (!res.ok && res.status !== 404 && res.status !== 412) {
-            throw new Error(`angie purge ${path}: ${res.status}`);
-          }
-        }),
-      );
+      const headers: Record<string, string> = {
+        "Surrogate-Key": tags.join(" "),
+      };
+      if (options?.token !== undefined) {
+        headers["X-Purge-Token"] = options.token;
+      }
+      const res = await fetch(url, { method: "POST", headers });
+      if (!res.ok) throw new Error(`nginx purge: ${res.status}`);
     },
   };
 }

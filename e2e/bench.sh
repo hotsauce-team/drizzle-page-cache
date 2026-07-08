@@ -10,8 +10,8 @@
 #   ./bench.sh ols caddy    # specific targets
 #
 # Targets: app (no cache, baseline) | ols (OpenLiteSpeed) | caddy (Souin+otter)
-#          | caddy-node | caddy-bun | varnish (+hitch for TLS) | angie
-#          (wildcard URL purging) | nginx (varnish/nginx exercise no purging)
+#          | caddy-node | caddy-bun | varnish (+hitch for TLS; exercises no
+#          purging) | angie | nginx (both: Lua skip-cache wildcard URL purging)
 #
 # Tuning parity (so the comparison is fair):
 #   nginx/angie  worker_processes auto, cache on /dev/shm (tmpfs), upstream
@@ -50,7 +50,7 @@ containers_for() {
     varnish) echo "$PREFIX-varnish-1 $PREFIX-app-1" ;;
     varnish-tls) echo "$PREFIX-hitch-1 $PREFIX-varnish-1 $PREFIX-app-1" ;;
     angie) echo "$PREFIX-angie-1 $PREFIX-app-angie-1" ;;
-    nginx) echo "$PREFIX-nginx-1 $PREFIX-app-1" ;;
+    nginx) echo "$PREFIX-nginx-1 $PREFIX-app-nginx-1" ;;
     *) echo "unknown target: $1" >&2; exit 1 ;;
   esac
 }

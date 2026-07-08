@@ -1,6 +1,13 @@
 #!/bin/sh
-# e2e purge loop: render → HIT → write → purge → MISS with fresh body.
-# Usage: ./verify.sh [ols|caddy|caddy-node|caddy-bun|angie|all]  (default: caddy)
+# e2e purge loop: render → HIT → write → purge → MISS with fresh body →
+# HIT again. The nginx family (angie, nginx, nginx-ls) additionally
+# exercises the Lua tag transports end to end: list-page purging, row
+# precision (editing post 3 must NOT evict post 2), the log-phase record
+# (refreshed entries become HITs again), and — for purge.lua — the /__dpc/
+# purge API contract. nginx-ls runs purge_litespeed.lua: the LiteSpeed
+# dialect (header-driven purging via the litespeed entrypoint) on plain
+# nginx.
+# Usage: ./verify.sh [ols|caddy|caddy-node|caddy-bun|angie|nginx|nginx-ls|all]  (default: caddy)
 # `all` sweeps every target, streams each step live, keeps going past
 # failures, and ends with a PASS/FAIL summary table (non-zero exit on any
 # failure). Full run: ./verify.sh all
@@ -22,9 +29,9 @@ if [ -z "$(docker compose ps -q --status running 2>/dev/null)" ]; then
   sleep 3 # proxies without healthchecks need a beat after their apps go healthy
 fi
 
-# Preference order: OLS, Caddy (Deno/Node/Bun), Angie (Varnish and nginx are
-# bench-only pairings — no purge loop to verify).
-ALL_TARGETS="ols caddy caddy-node caddy-bun angie"
+# Preference order: OLS, Caddy (Deno/Node/Bun), Angie, nginx (Varnish is a
+# bench-only pairing — no purge loop to verify).
+ALL_TARGETS="ols caddy caddy-node caddy-bun angie nginx nginx-ls"
 
 if [ "$HOST" = "all" ]; then
   self="$0"
@@ -63,8 +70,14 @@ fail() {
 
 echo "== target: $HOST =="
 
+# The nginx family runs the Lua tag transports, which get extra
+# assertions; only purge.lua (angie, nginx) serves the /__dpc/ purge API —
+# purge_litespeed.lua (nginx-ls) is purged by response headers instead.
+case "$HOST" in angie | nginx | nginx-ls) LUA=1 ;; *) LUA="" ;; esac
+case "$HOST" in angie | nginx) PURGE_API=1 ;; *) PURGE_API="" ;; esac
+
 # Unique query string per run: step 1 is a genuine MISS even on a warm cache,
-# and step 5 additionally proves tag purges evict query-string variants.
+# and step 5 additionally proves purges reach query-string variants.
 V="$(date +%s)"
 P="/post/3?v=$V"
 
@@ -76,15 +89,18 @@ echo "2) second request is a HIT"
 s2=$(status "$P"); echo "   $s2"
 echo "$s2" | grep -qi 'hit' || fail 2 "$P"
 
-# Angie purges by URL pattern, not tag: `PURGE /post/*` is a prefix match on
-# the cache key. Warm a SECOND entry under the prefix to prove the wildcard
-# clears entries beyond the row that was written.
-if [ "$HOST" = "angie" ]; then
+if [ -n "$LUA" ]; then
+  # Warm a row that will NOT be written (precision witness) and the list
+  # page (tagged `posts`, so the write MUST refresh it).
   W="/post/2?v=$V"
-  echo "2b) warm a second entry under /post/ (wildcard witness)"
+  echo "2b) warm an unrelated row entry (precision witness)"
   status "$W" > /dev/null
   s2b=$(status "$W"); echo "   $s2b"
   echo "$s2b" | grep -qi 'hit' || fail 2b "$W"
+  echo "2c) warm the list page (table-tag witness)"
+  status "/" > /dev/null
+  s2c=$(status "/"); echo "   $s2c"
+  echo "$s2c" | grep -qi 'hit' || fail 2c "/"
 fi
 
 echo "3) body snapshot before write"
@@ -101,10 +117,52 @@ after=$(curl_ "$HOST$P")
 { [ "$before" != "$after" ] && echo "$after" | grep -q 'Edited'; } ||
   fail "5 (body)" "$P"
 
-if [ "$HOST" = "angie" ]; then
-  echo "5b) the second entry was also evicted by the wildcard purge"
-  s5b=$(status "$W"); echo "   $s5b"
-  echo "$s5b" | grep -qvi 'hit' || fail 5b "$W"
+if [ -n "$LUA" ]; then
+  echo "5b) the write purged the row tag as a BYPASS, not a coincidence"
+  echo "$s3" | grep -qi 'bypass' || fail 5b "$P"
+  echo "5c) the list page (tag: posts) was refreshed with the new title"
+  s5c=$(status "/"); echo "   $s5c"
+  echo "$s5c" | grep -qi 'bypass' || fail 5c "/"
+  curl_ "$HOST/" | grep -q 'Edited' || fail "5c (body)" "/"
+  echo "5d) precision: the unwritten row is STILL a HIT (no over-purge)"
+  s5d=$(status "$W"); echo "   $s5d"
+  echo "$s5d" | grep -qi 'hit' || fail 5d "$W"
+fi
+
+echo "6) the refreshed entry is cacheable again (HIT)"
+s6=$(status "$P"); echo "   $s6"
+echo "$s6" | grep -qi 'hit' || fail 6 "$P"
+
+if [ -n "$PURGE_API" ]; then
+  echo "7) purge API contract (/__dpc/, Fastly-shaped routes)"
+  c7a=$(curl_ -o /dev/null -w '%{http_code}' -X POST "$HOST/__dpc/purge")
+  echo "   POST /purge without Surrogate-Key -> $c7a"
+  [ "$c7a" = "400" ] || fail "7 (missing header)" "/__dpc/purge"
+  c7b=$(curl_ -o /dev/null -w '%{http_code}' -X POST \
+    -H "Surrogate-Key: no-such-tag" "$HOST/__dpc/purge")
+  echo "   POST /purge unknown tag -> $c7b"
+  [ "$c7b" = "200" ] || fail "7 (unknown tag)" "/__dpc/purge"
+  s7=$(status "$P"); echo "   $s7"
+  echo "$s7" | grep -qi 'hit' || fail "7 (still hit)" "$P"
+  c7c=$(curl_ -o /dev/null -w '%{http_code}' "$HOST/__dpc/purge")
+  echo "   GET /purge -> $c7c"
+  [ "$c7c" = "405" ] || fail "7 (method)" "/__dpc/purge"
+
+  echo "7b) single-tag route evicts exactly its row"
+  c7d=$(curl_ -o /dev/null -w '%{http_code}' -X POST "$HOST/__dpc/purge/posts:2")
+  [ "$c7d" = "200" ] || fail "7b (single purge)" "/__dpc/purge/posts:2"
+  s7b=$(status "$W"); echo "   $s7b"
+  echo "$s7b" | grep -qi 'bypass' || fail "7b (witness evicted)" "$W"
+  s7c=$(status "$P"); echo "   $s7c"
+  echo "$s7c" | grep -qi 'hit' || fail "7b (other row untouched)" "$P"
+
+  echo "7c) purge_all evicts everything"
+  c7e=$(curl_ -o /dev/null -w '%{http_code}' -X POST "$HOST/__dpc/purge_all")
+  [ "$c7e" = "200" ] || fail "7c (purge_all)" "/__dpc/purge_all"
+  s7d=$(status "$P"); echo "   $s7d"
+  echo "$s7d" | grep -qi 'bypass' || fail "7c (evicted)" "$P"
+  s7e=$(status "$P"); echo "   $s7e"
+  echo "$s7e" | grep -qi 'hit' || fail "7c (hit again)" "$P"
 fi
 
 echo "PASS: purge loop verified against $HOST"

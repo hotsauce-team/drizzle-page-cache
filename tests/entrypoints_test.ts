@@ -1,12 +1,16 @@
-// The souin/varnish/angie directory entrypoints (adapter-style factories):
-// each wires its purger from `site` and rejects `purge` at compile time.
-// The litespeed entrypoint has its own richer test (litespeed_entry_test.ts).
+// The directory entrypoints (adapter-style factories): each wires its
+// purger from `site` and rejects `purge` at compile time. The canonical
+// dialect modules are `surrogate-key` (imported below via its `nginx` and
+// `angie` product re-exports) and `xkey` (via `varnish`); `souin` is its
+// own dialect. The litespeed entrypoint has its own richer test
+// (litespeed_entry_test.ts).
 
 import { assertEquals } from "@std/assert";
 import { eq } from "drizzle-orm";
 import { createPageCache as createSouinPageCache } from "../souin/mod.ts";
 import { createPageCache as createVarnishPageCache } from "../varnish/mod.ts";
 import { createPageCache as createAngiePageCache } from "../angie/mod.ts";
+import { createPageCache as createNginxPageCache } from "../nginx/mod.ts";
 import { createTestContext, posts, schema } from "./helpers.ts";
 import type { PageCache } from "../types.ts";
 
@@ -67,20 +71,43 @@ Deno.test("varnish entrypoint: one PURGE to site with the xkey header", async ()
   assertEquals(keys.split(" ").sort(), ["posts", "posts:3"]);
 });
 
-Deno.test("angie entrypoint: routes map tags to wildcard PURGE URLs", async () => {
-  const pageCache = createAngiePageCache({
+Deno.test("nginx entrypoint: one POST to the purge endpoint with tags in Surrogate-Key", async () => {
+  const pageCache = createNginxPageCache({
     schema,
-    site: "http://localhost",
-    routes: { posts: ["/", "/post/*"] },
+    site: "http://localhost/", // trailing slash normalized
     settleMs: 1,
   });
   const calls = await writeAndFlush(pageCache);
-  // posts + posts:3 both resolve to the same two URLs — deduplicated.
-  assertEquals(calls.map((c) => c.url).sort(), [
-    "http://localhost/",
-    "http://localhost/post/*",
-  ]);
-  assertEquals(new Set(calls.map((c) => c.method)), new Set(["PURGE"]));
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].url, "http://localhost/__dpc/purge");
+  assertEquals(calls[0].method, "POST");
+  const headers = new Headers(calls[0].headers);
+  assertEquals(
+    (headers.get("Surrogate-Key") ?? "").split(" ").sort(),
+    ["posts", "posts:3"],
+  );
+  // No token option -> no token header.
+  assertEquals(headers.get("X-Purge-Token"), null);
+});
+
+Deno.test("angie entrypoint: alias of nginx; purgePath/purgeToken wire through", async () => {
+  const pageCache = createAngiePageCache({
+    schema,
+    site: "http://localhost",
+    purgePath: "/_cache/purge",
+    purgeToken: "s3cr3t",
+    settleMs: 1,
+  });
+  const calls = await writeAndFlush(pageCache);
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].url, "http://localhost/_cache/purge");
+  assertEquals(calls[0].method, "POST");
+  const headers = new Headers(calls[0].headers);
+  assertEquals(
+    (headers.get("Surrogate-Key") ?? "").split(" ").sort(),
+    ["posts", "posts:3"],
+  );
+  assertEquals(headers.get("X-Purge-Token"), "s3cr3t");
 });
 
 Deno.test("entrypoints: `purge` is controlled and rejected at compile time", () => {
@@ -100,8 +127,13 @@ Deno.test("entrypoints: `purge` is controlled and rejected at compile time", () 
   const _angie: Parameters<typeof createAngiePageCache>[0] = {
     schema,
     site: "http://localhost",
-    routes: {},
     // @ts-expect-error — `purge` is wired by the angie entrypoint
+    purge: noopPurger,
+  };
+  const _nginx: Parameters<typeof createNginxPageCache>[0] = {
+    schema,
+    site: "http://localhost",
+    // @ts-expect-error — `purge` is wired by the nginx entrypoint
     purge: noopPurger,
   };
   assertEquals(typeof createSouinPageCache, "function");

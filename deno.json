@@ -5,14 +5,17 @@
     ".": "./mod.ts",
     "./litespeed": "./litespeed/mod.ts",
     "./souin": "./souin/mod.ts",
+    "./surrogate-key": "./surrogate-key/mod.ts",
+    "./xkey": "./xkey/mod.ts",
     "./varnish": "./varnish/mod.ts",
-    "./angie": "./angie/mod.ts"
+    "./angie": "./angie/mod.ts",
+    "./nginx": "./nginx/mod.ts"
   },
   "license": "MIT",
 
   "tasks": {
     "test": "deno test --allow-env --allow-read tests/",
-    "check": "deno check mod.ts litespeed/mod.ts souin/mod.ts varnish/mod.ts angie/mod.ts tests/",
+    "check": "deno check mod.ts litespeed/mod.ts souin/mod.ts surrogate-key/mod.ts xkey/mod.ts varnish/mod.ts angie/mod.ts nginx/mod.ts tests/",
     "build:npm": "deno run -A scripts/build_npm.ts"
   },
 
@@ -28,8 +31,11 @@
       "*.ts",
       "litespeed/",
       "souin/",
+      "surrogate-key/",
+      "xkey/",
       "varnish/",
       "angie/",
+      "nginx/",
       "README.md",
       "LICENSE"
     ],

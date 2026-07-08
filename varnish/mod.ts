@@ -1,5 +1,9 @@
 /**
- * Varnish (xkey vmod) entrypoint — drizzle-adapter style:
+ * Varnish entrypoint — the `drizzle-page-cache/xkey` factory under the name
+ * Varnish users will look for. Wires `varnishPurger`: one PURGE request to
+ * `site` carrying the tags in an `xkey` header. Requires the xkey vmod and a
+ * VCL snippet handling PURGE (`xkey.purge(req.http.xkey)`) — see the full
+ * dialect docs on `../xkey/mod.ts`.
  *
  * ```ts
  * import { createPageCache } from "drizzle-page-cache/varnish";
@@ -10,29 +14,8 @@
  *   ttl: 3600,
  * });
  * ```
- *
- * Wires `varnishPurger`: one PURGE request to `site` carrying the tags in an
- * `xkey` header. Requires the xkey vmod and a VCL snippet handling PURGE
- * (`xkey.purge(req.http.xkey)`). For a custom purger, drop down to the root
- * `createPageCache`.
  */
 
-import { createPageCache as createCorePageCache } from "../page_cache.ts";
-import { varnishPurger } from "../purgers.ts";
-import type { PageCache, PageCacheOptions } from "../types.ts";
-
-export interface VarnishPageCacheOptions
-  extends Omit<PageCacheOptions, "purge"> {
-  /** The proxy's base URL the PURGE is sent to, e.g. `http://localhost`. */
-  site: string;
-}
-
-export function createPageCache(options: VarnishPageCacheOptions): PageCache {
-  const { site, ...rest } = options;
-  return createCorePageCache({
-    ...rest,
-    purge: varnishPurger(site.replace(/\/+$/, "")),
-  });
-}
-
+export { createPageCache } from "../xkey/mod.ts";
+export type { XkeyPageCacheOptions as VarnishPageCacheOptions } from "../xkey/mod.ts";
 export type { PageCache } from "../types.ts";

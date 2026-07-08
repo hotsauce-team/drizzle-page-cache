@@ -1,0 +1,7 @@
+# Plain nginx with the distro's lua-nginx-module — the "free nginx, no
+# compiling" purge story: Alpine builds the module against its own nginx,
+# so versions always match. lua-resty-core/lrucache are required by the
+# module at init (recent lua-nginx-module versions hard-require them).
+FROM alpine:3.21
+RUN apk add --no-cache nginx nginx-mod-http-lua lua-resty-core lua-resty-lrucache
+CMD ["nginx", "-g", "daemon off;"]

@@ -186,10 +186,10 @@ services:
     depends_on:
       - varnish
 
-  # -- 4. Angie (URL-pattern wildcard purging) --------------------------------
+  # -- 4. Angie (tag purging via nginx/purge.lua) ------------------------------
 
-  # Same app again for the Angie pairing (official cache-purge module,
-  # preinstalled in the official image).
+  # Same app again for the Angie pairing (nginx/purge.lua via Angie's
+  # official lua module, bundled in the full image).
   app-angie:
     image: denoland/deno:alpine
     working_dir: /repo
@@ -213,6 +213,7 @@ services:
     shm_size: 256m
     volumes:
       - ./nginx/angie.conf:/etc/angie/angie.conf:ro
+      - ../nginx:/dpc:ro
       - ./certs:/certs:ro
     ports:
       - "127.0.0.1:18085:80"
@@ -220,18 +221,79 @@ services:
       app-angie:
         condition: service_healthy
 
-  # -- 5. nginx (bench-only reference) ----------------------------------------
+  # -- 5. nginx (tag purging via nginx/purge.lua) ------------------------------
 
-  # No purging exercised: official OSS nginx ships no purge module — you must
-  # bundle ngx_cache_purge into your own build (see BENCHMARKS.md).
+  # Free nginx has no tag support, but the distro's lua-nginx-module
+  # package (nginx-mod-http-lua) runs nginx/purge.lua: PURGE requests mark
+  # tags stale and proxy_cache_bypass refreshes matching keys on the next hit.
+  app-nginx:
+    image: denoland/deno:alpine
+    working_dir: /repo
+    volumes:
+      - ../:/repo:ro
+    environment:
+      - PURGE_STYLE=nginx
+      - PURGE_SITE=http://nginx
+    command: deno run --allow-net --allow-env /repo/e2e/app/server.ts
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1:8000/ || exit 1",
+      ]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
   nginx:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
     shm_size: 256m
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx:/dpc:ro
       - ./certs:/certs:ro
     ports:
       - "127.0.0.1:18084:80"
     depends_on:
-      app:
+      app-nginx:
+        condition: service_healthy
+
+  # -- 6. nginx-ls (plain nginx speaking the LiteSpeed Cache dialect) ---------
+
+  # nginx/purge_litespeed.lua makes plain nginx understand X-LiteSpeed-Tag /
+  # -Cache-Control / -Purge — the headers WordPress's LiteSpeed Cache plugin
+  # emits. Dogfooded here with the litespeed entrypoint UNCHANGED (same app
+  # config as the OLS pairing, different proxy). Verify-only, not benched.
+  app-nginx-ls:
+    image: denoland/deno:alpine
+    working_dir: /repo
+    volumes:
+      - ../:/repo:ro
+    environment:
+      - PURGE_STYLE=litespeed
+      - PURGE_SITE=http://nginx-ls
+      - PURGE_TOKEN=e2e-secret
+    command: deno run --allow-net --allow-env /repo/e2e/app/server.ts
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1:8000/ || exit 1",
+      ]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  nginx-ls:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    shm_size: 256m
+    volumes:
+      - ./nginx/nginx-ls.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx:/dpc:ro
+    ports:
+      - "127.0.0.1:18087:80"
+    depends_on:
+      app-nginx-ls:
         condition: service_healthy
