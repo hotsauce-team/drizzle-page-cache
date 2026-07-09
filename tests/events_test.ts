@@ -137,7 +137,7 @@ Deno.test("header-overflow falls back to wildcard when table tags still overflow
   assertEquals(res.headers.get("Surrogate-Key"), "*");
 });
 
-Deno.test("debug: true exposes X-Cache-Tags even on excluded paths", async () => {
+Deno.test("debug: true exposes X-Cache-Tags even on safety-gated responses", async () => {
   const base = createTestContext();
   const pageCache = createPageCache({
     schema,
@@ -147,9 +147,11 @@ Deno.test("debug: true exposes X-Cache-Tags even on excluded paths", async () =>
   const db = pageCache.wrap(base.raw);
   const handler = pageCache.middleware(async () => {
     await db.select().from(posts).where(eq(posts.id, 4));
-    return new Response("admin page");
+    return new Response("account page", {
+      headers: { "Set-Cookie": "sid=abc" },
+    });
   });
-  const res = await handler(new Request("http://localhost/admin/posts/4"));
+  const res = await handler(new Request("http://localhost/account/posts/4"));
   assertEquals(res.headers.get("X-Cache-Tags"), "posts:4");
   assertEquals(res.headers.get("Surrogate-Key"), null); // still not cacheable
 });

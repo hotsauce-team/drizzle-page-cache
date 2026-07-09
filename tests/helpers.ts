@@ -42,7 +42,12 @@ export class RecordingPurger implements Purger {
   }
 }
 
-export function createTestContext(options: { settleMs?: number } = {}) {
+export function createTestContext(
+  options: {
+    settleMs?: number;
+    shouldTag?: (req: Request, res: Response) => boolean;
+  } = {},
+) {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(`
     CREATE TABLE users (
@@ -108,6 +113,7 @@ export function createTestContext(options: { settleMs?: number } = {}) {
     schema,
     purge: purger,
     settleMs: options.settleMs ?? 1,
+    shouldTag: options.shouldTag,
   });
   const db = pageCache.wrap(raw);
 

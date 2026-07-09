@@ -29,7 +29,6 @@ export function createPageCache(options: PageCacheOptions): PageCache {
   const ttl = options.ttl ?? 3600;
   const swr = options.staleWhileRevalidate ?? 30;
   const settleMs = options.settleMs ?? 50;
-  const exclude = options.exclude ?? ["/admin"];
   const prefix = options.tagPrefix ?? "";
   const wildcardTag = options.wildcardTag ?? WILDCARD;
   const maxHeaderBytes = options.maxHeaderBytes ?? 7900;
@@ -40,24 +39,19 @@ export function createPageCache(options: PageCacheOptions): PageCache {
     value: options.purgeEcho.value ??
       ((tags: readonly string[]) => tags.map((t) => `tag=${t}`).join(", ")),
   };
+  // Always enforced, on top of any custom shouldTag: the app's own
+  // non-shareable signals win — otherwise the header stamping below would
+  // turn a personalized response into a shared-cache entry. Mirrors what the
+  // Lua log() phase refuses to store.
+  const shareable = (res: Response): boolean => {
+    if (res.headers.has("Set-Cookie")) return false;
+    const cc = res.headers.get("Cache-Control")?.toLowerCase() ?? "";
+    // `=` catches the RFC 7234 qualified forms (private="x", no-cache="x")
+    // — this cache can't strip individual fields, so treat as non-shareable.
+    return !/(^|[\s,])(private|no-store|no-cache)([\s,;=]|$)/.test(cc);
+  };
   const shouldTag = options.shouldTag ??
-    ((req: Request, res: Response) => {
-      if (req.method !== "GET" || !res.ok) return false;
-      // Respect the app's own non-shareable signals — otherwise the header
-      // stamping below would turn a personalized GET into a shared-cache
-      // entry. Mirrors what the Lua log() phase refuses to store.
-      if (res.headers.has("Set-Cookie")) return false;
-      const cc = res.headers.get("Cache-Control")?.toLowerCase() ?? "";
-      // `=` catches the RFC 7234 qualified forms (private="x", no-cache="x")
-      // — this cache can't strip individual fields, so treat as non-shareable.
-      if (/(^|[\s,])(private|no-store|no-cache)([\s,;=]|$)/.test(cc)) {
-        return false;
-      }
-      const path = new URL(req.url).pathname;
-      return !exclude.some((p) =>
-        path === p || path.startsWith(p.endsWith("/") ? p : `${p}/`)
-      );
-    });
+    ((req: Request, res: Response) => req.method === "GET" && res.ok);
 
   // -- events: silent by default except the two that can mean stale pages ----
   const seenWildcardReasons = new Set<string>();
@@ -177,7 +171,7 @@ export function createPageCache(options: PageCacheOptions): PageCache {
         const res = await scope.run(tags, async () => await handler(req));
         if (tags.size === 0) return res;
 
-        const cacheable = shouldTag(req, res);
+        const cacheable = shareable(res) && shouldTag(req, res);
         if (!cacheable && !options.debug) return res;
 
         const out = new Response(res.body, res);

@@ -100,14 +100,60 @@ Deno.test("purge-echo route gates on method and token", async () => {
   assertEquals(ok.headers.get("X-LiteSpeed-Purge"), "tag=posts:1");
 });
 
-Deno.test("excluded paths (default /admin) are never tagged", async () => {
+Deno.test("no built-in path exclusion: a clean GET under /admin is tagged", async () => {
   const { db, pageCache } = createTestContext();
   const handler = pageCache.middleware(async () => {
     await db.select().from(posts).limit(1);
     return new Response("admin list");
   });
   const res = await handler(new Request("http://localhost/admin/posts"));
-  assertEquals(res.headers.get("Surrogate-Key"), null);
+  assertEquals(res.headers.get("Surrogate-Key"), "posts");
+});
+
+Deno.test("custom shouldTag can exclude paths", async () => {
+  const { db, pageCache } = createTestContext({
+    shouldTag: (req, res) =>
+      req.method === "GET" && res.ok &&
+      !new URL(req.url).pathname.startsWith("/admin/"),
+  });
+  const handler = pageCache.middleware(async () => {
+    await db.select().from(posts).limit(1);
+    return new Response("list");
+  });
+  const admin = await handler(new Request("http://localhost/admin/posts"));
+  assertEquals(admin.headers.get("Surrogate-Key"), null);
+  const pub = await handler(new Request("http://localhost/posts"));
+  assertEquals(pub.headers.get("Surrogate-Key"), "posts");
+});
+
+Deno.test("safety gate wins over a permissive shouldTag", async () => {
+  const { db, pageCache } = createTestContext({ shouldTag: () => true });
+  const handler = pageCache.middleware(async (req) => {
+    await db.select().from(posts).limit(1);
+    return new URL(req.url).pathname === "/cookie"
+      ? new Response("hi", { headers: { "Set-Cookie": "sid=abc" } })
+      : new Response("hi", { headers: { "Cache-Control": "private" } });
+  });
+  const cookie = await handler(new Request("http://localhost/cookie"));
+  assertEquals(cookie.headers.get("Surrogate-Key"), null);
+  const priv = await handler(new Request("http://localhost/private"));
+  assertEquals(priv.headers.get("Surrogate-Key"), null);
+  assertEquals(priv.headers.get("Cache-Control"), "private");
+});
+
+Deno.test("shouldTag widened to 404s tags an entity miss", async () => {
+  const { db, pageCache } = createTestContext({
+    shouldTag: (req, res) =>
+      req.method === "GET" && (res.ok || res.status === 404),
+  });
+  const handler = pageCache.middleware(async () => {
+    await db.select().from(posts).where(eq(posts.id, 999));
+    return new Response("not found", { status: 404 });
+  });
+  const res = await handler(new Request("http://localhost/post/999"));
+  // miss on unique equality → row tag + table tag, so creating post 999
+  // later purges this cached 404
+  assertEquals(res.headers.get("Surrogate-Key"), "posts:999 posts");
 });
 
 Deno.test("untagged responses pass through untouched", async () => {

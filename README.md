@@ -37,9 +37,8 @@ const db = pageCache.wrap(drizzle(client, { schema }));
 export default { fetch: pageCache.middleware(app.fetch) };
 ```
 
-Every cacheable response (by default: `GET`, 2xx, path not under `/admin`, and
-carrying no `Set-Cookie` or `private`/`no-store`/`no-cache` in `Cache-Control` —
-so personalized responses are never promoted to a shared cache) now carries:
+Every cacheable response (see [What gets cached](#what-gets-cached) — by
+default `GET` and 2xx) now carries:
 
 ```
 Surrogate-Key: posts:7 users
@@ -53,6 +52,39 @@ When a write executes — `db.update(posts).set(...).where(eq(posts.id, 7))` —
 matching tags (`posts:7`, `posts`) are purged automatically, batched and
 deduplicated, and (inside `db.transaction`) held until commit, dropped on
 rollback.
+
+## What gets cached
+
+Two layers decide whether a response gets tag + cache headers:
+
+- **Safety gate — always enforced, not configurable.** A response carrying
+  `Set-Cookie`, or `private`/`no-store`/`no-cache` in `Cache-Control`, is never
+  tagged or made shareable — your app's non-shareable signals win, so a
+  personalized page can't be promoted into a shared cache. (The nginx Lua
+  helper independently refuses to store such responses, too.)
+- **Policy — `shouldTag`, yours to change.** Default: `GET` && 2xx. Narrow it
+  to keep sections out of the cache:
+
+  ```ts
+  createPageCache({
+    schema,
+    purge,
+    shouldTag: (req, res) =>
+      req.method === "GET" && res.ok &&
+      !new URL(req.url).pathname.startsWith("/admin/"),
+  });
+  ```
+
+  or widen it — e.g. allow 404s, which entity-miss tags already invalidate
+  when the row is later created.
+
+For authenticated areas, the best fix isn't path exclusion here: have your
+auth middleware send `Cache-Control: private` (or a session `Set-Cookie`) and
+the safety gate handles it everywhere, including at the proxy. Use `shouldTag`
+as the fallback when you can't change those responses.
+
+Responses that ran no observed queries (no tags) always pass through
+untouched.
 
 ## Tag model
 
@@ -309,7 +341,7 @@ onEvent: (e) => {
 ```
 
 **Debugging staleness locally**: set `debug: true` to expose the computed tags
-as `X-Cache-Tags` on every response (including uncacheable/excluded paths), and
+as `X-Cache-Tags` on every response (including uncacheable ones), and
 log `purge-batch` — together they answer "why did(n't) this page refresh." Never
 enable `debug` in production; it leaks schema names.
 
