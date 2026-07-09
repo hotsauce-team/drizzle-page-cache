@@ -90,8 +90,16 @@ export function createTestContext(options: { settleMs?: number } = {}) {
   const raw = drizzle(
     run1,
     // batch callback: run each query in order and return their results.
-    (queries: { sql: string; params: unknown[]; method: string }[]) =>
-      Promise.all(queries.map((q) => run1(q.sql, q.params, q.method))),
+    // Sequential on purpose — real sqlite-proxy batches run one statement at
+    // a time inside a transaction, and Promise.all would let side effects
+    // reorder if run1 ever gained an internal await.
+    async (queries: { sql: string; params: unknown[]; method: string }[]) => {
+      const results = [];
+      for (const q of queries) {
+        results.push(await run1(q.sql, q.params, q.method));
+      }
+      return results;
+    },
     { schema },
   );
 

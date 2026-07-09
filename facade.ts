@@ -73,6 +73,12 @@ export function wrapDb<TDb>(db: TDb, ctx: FacadeContext): TDb {
           return (fn: Any, config: Any) =>
             runTransaction(target, fn, config, ctx);
         case "batch":
+          // Only wrap when the driver actually implements batch — otherwise
+          // pass through so `db.batch` stays undefined and feature detection
+          // on the wrapped db keeps working.
+          if (typeof target.batch !== "function") {
+            return Reflect.get(target, prop, receiver);
+          }
           // Root-level batch (sqlite-proxy / libsql / D1 / neon-http) runs an
           // array of statements that never flow through the builder taps.
           // Derive purges from each statement's facade metadata: recognized

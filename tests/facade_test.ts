@@ -184,6 +184,17 @@ Deno.test("db.batch() of fully-opaque statements warns + wildcard-purges", async
   assertEquals(purged, [WILDCARD]);
 });
 
+Deno.test("wrapping a db without batch leaves db.batch undefined", () => {
+  const ctx: FacadeContext = {
+    info: analyzeSchema(schema),
+    addTags: () => {},
+    schedulePurge: () => {},
+    emit: () => {},
+  };
+  const wrapped = wrapDb({}, ctx) as { batch?: unknown };
+  assertEquals(wrapped.batch, undefined);
+});
+
 Deno.test("db.batch of observed writes purges precise tags (no wildcard)", async () => {
   const { db, pageCache, purger } = createTestContext();
   await db.batch([

@@ -48,7 +48,9 @@ export function createPageCache(options: PageCacheOptions): PageCache {
       // entry. Mirrors what the Lua log() phase refuses to store.
       if (res.headers.has("Set-Cookie")) return false;
       const cc = res.headers.get("Cache-Control")?.toLowerCase() ?? "";
-      if (/(^|[\s,])(private|no-store|no-cache)([\s,;]|$)/.test(cc)) {
+      // `=` catches the RFC 7234 qualified forms (private="x", no-cache="x")
+      // — this cache can't strip individual fields, so treat as non-shareable.
+      if (/(^|[\s,])(private|no-store|no-cache)([\s,;=]|$)/.test(cc)) {
         return false;
       }
       const path = new URL(req.url).pathname;

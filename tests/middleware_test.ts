@@ -64,6 +64,18 @@ Deno.test("GET with Cache-Control: private is not tagged", async () => {
   assertEquals(res.headers.get("Cache-Control"), "private, max-age=60");
 });
 
+Deno.test('GET with qualified Cache-Control: no-cache="set-cookie" is not tagged', async () => {
+  const { db, pageCache } = createTestContext();
+  const handler = pageCache.middleware(async () => {
+    await db.select().from(posts).where(eq(posts.id, 3));
+    return new Response("hi", {
+      headers: { "Cache-Control": 'no-cache="set-cookie", max-age=60' },
+    });
+  });
+  const res = await handler(new Request("http://localhost/post/3"));
+  assertEquals(res.headers.get("Surrogate-Key"), null);
+});
+
 Deno.test("purge-echo route gates on method and token", async () => {
   const pageCache = createPageCache({
     schema,
