@@ -107,6 +107,10 @@ export function createPageCache(options: PageCacheOptions): PageCache {
       pending.add(withPrefix(t));
       added = true;
     }
+    // Every purge also reaches the wildcard bucket: a page tagged `*`
+    // (opaque read, header overflow) may depend on ANY write, so any purge
+    // must evict it — the invariant the tag-model table promises.
+    if (added) pending.add(withPrefix(WILDCARD));
     if (added && timer === undefined) {
       timer = setTimeout(() => {
         timer = undefined;

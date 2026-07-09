@@ -2,9 +2,11 @@ import { assertEquals } from "@std/assert";
 import { eq, or } from "drizzle-orm";
 import { type FacadeContext, wrapDb } from "../facade.ts";
 import { analyzeSchema, WILDCARD } from "../derive.ts";
+import { createPageCache } from "../page_cache.ts";
 import {
   createTestContext,
   posts,
+  RecordingPurger,
   schema,
   tagsFor,
   users,
@@ -140,15 +142,15 @@ Deno.test("update by PK purges row + table tags after settle", async () => {
   await db.update(posts).set({ title: "edited" }).where(eq(posts.id, 7));
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts", "posts:7"]);
+  assertEquals(purger.all, ["*", "posts", "posts:7"]);
 });
 
-Deno.test("insert purges the table tag only", async () => {
+Deno.test("insert purges the table tag (+ the wildcard bucket)", async () => {
   const { db, pageCache, purger } = createTestContext();
   await db.insert(posts).values({ title: "new", body: "b", authorId: 1 });
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts"]);
+  assertEquals(purger.all, ["*", "posts"]);
 });
 
 Deno.test("delete by PK purges row + table tags", async () => {
@@ -156,7 +158,7 @@ Deno.test("delete by PK purges row + table tags", async () => {
   await db.delete(posts).where(eq(posts.id, 9));
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts", "posts:9"]);
+  assertEquals(purger.all, ["*", "posts", "posts:9"]);
 });
 
 Deno.test("db.batch() of fully-opaque statements warns + wildcard-purges", async () => {
@@ -195,7 +197,7 @@ Deno.test("wrapping a db without batch leaves db.batch undefined", () => {
   assertEquals(wrapped.batch, undefined);
 });
 
-Deno.test("db.batch of observed writes purges precise tags (no wildcard)", async () => {
+Deno.test("db.batch of observed writes purges precise tags (no unobserved-write fallback)", async () => {
   const { db, pageCache, purger } = createTestContext();
   await db.batch([
     db.update(posts).set({ title: "a" }).where(eq(posts.id, 3)),
@@ -203,7 +205,9 @@ Deno.test("db.batch of observed writes purges precise tags (no wildcard)", async
   ]);
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts", "posts:3"]);
+  // Precise tags derived per statement; `*` here is only the bucket flush
+  // every purge carries, not the opaque-statement fallback.
+  assertEquals(purger.all, ["*", "posts", "posts:3"]);
 });
 
 Deno.test("db.batch with an unobservable statement adds the wildcard bucket", async () => {
@@ -235,7 +239,7 @@ Deno.test("update by non-PK column purges table tag (no false row precision)", a
   );
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["users"]);
+  assertEquals(purger.all, ["*", "users"]);
 });
 
 Deno.test("purge batches are deduplicated across writes in the settle window", async () => {
@@ -246,5 +250,40 @@ Deno.test("purge batches are deduplicated across writes in the settle window", a
   await new Promise((r) => setTimeout(r, 30));
   await pageCache.flush();
   assertEquals(purger.batches.length, 1);
-  assertEquals(purger.batches[0], ["posts", "posts:1", "posts:2"]);
+  assertEquals(purger.batches[0], ["*", "posts", "posts:1", "posts:2"]);
+});
+
+// -- wildcard bucket: every purge must reach it (README tag-model table) ------
+
+Deno.test("every write purge also flushes the wildcard bucket", async () => {
+  const { db, pageCache, purger } = createTestContext();
+  await db.update(posts).set({ title: "x" }).where(eq(posts.id, 7));
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  // A page tagged * (opaque read) may depend on this write — the purge
+  // must reach the bucket, not just the precise tags.
+  assertEquals(purger.all, ["*", "posts", "posts:7"]);
+});
+
+Deno.test("manual purgeTags() flushes the wildcard bucket too", async () => {
+  const { pageCache, purger } = createTestContext();
+  pageCache.purgeTags("posts");
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  assertEquals(purger.all, ["*", "posts"]);
+});
+
+Deno.test("bucket purge respects wildcardTag rename and tagPrefix", async () => {
+  const purger = new RecordingPurger();
+  const pageCache = createPageCache({
+    schema,
+    purge: purger,
+    settleMs: 1,
+    wildcardTag: "dpc-wild",
+    tagPrefix: "shop_",
+  });
+  pageCache.purgeTags("posts");
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  assertEquals(purger.all, ["shop_dpc-wild", "shop_posts"]);
 });

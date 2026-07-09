@@ -30,7 +30,11 @@ Deno.test("purge-batch event fires with the flushed tags", async () => {
   await pageCache.flush();
   const batch = events.find((e) => e.kind === "purge-batch");
   assertEquals(batch?.kind, "purge-batch");
-  assertEquals([...(batch!.tags as string[])].sort(), ["posts", "posts:2"]);
+  assertEquals([...(batch!.tags as string[])].sort(), [
+    "*",
+    "posts",
+    "posts:2",
+  ]);
 });
 
 Deno.test("purge-error event fires when the purger throws", async () => {
@@ -53,7 +57,10 @@ Deno.test("purge-error event fires when the purger throws", async () => {
   await pageCache.flush();
   const err = events.find((e) => e.kind === "purge-error");
   assertEquals(err?.kind, "purge-error");
-  assertEquals((err as { tags: readonly string[] }).tags, ["posts"]);
+  assertEquals(
+    [...(err as { tags: readonly string[] }).tags].sort(),
+    ["*", "posts"],
+  );
 });
 
 Deno.test("wildcard-tag event fires once per reason (deduplicated)", async () => {
@@ -184,7 +191,13 @@ Deno.test("tagPrefix namespaces derived tags, manual tags, and purges", async ()
   pageCache.purgeTags("custom");
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["shop_custom", "shop_posts", "shop_posts:7"]);
+  // The wildcard-bucket tag is prefixed too, so reads and purges agree.
+  assertEquals(purger.all, [
+    "shop_*",
+    "shop_custom",
+    "shop_posts",
+    "shop_posts:7",
+  ]);
 });
 
 Deno.test("tagPrefix applies to the wildcard bucket too", async () => {
