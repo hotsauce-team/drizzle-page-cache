@@ -1,7 +1,12 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { eq } from "drizzle-orm";
 import { createPageCache } from "../page_cache.ts";
-import { createTestContext, posts, RecordingPurger, schema } from "./helpers.ts";
+import {
+  createTestContext,
+  posts,
+  RecordingPurger,
+  schema,
+} from "./helpers.ts";
 
 Deno.test("cacheable GET gets Surrogate-Key and Cache-Control headers", async () => {
   const { db, pageCache } = createTestContext();
@@ -89,9 +94,13 @@ Deno.test("purge-echo route gates on method and token", async () => {
   );
   assertEquals(put.status, 405);
   assertEquals(put.headers.get("Allow"), "GET, POST");
+  // Error responses must not be cacheable either — a proxy-cached 405/403
+  // pinned in front of the echo route would block later purges.
+  assertEquals(put.headers.get("Cache-Control"), "no-store");
 
   const bad = await handler(new Request("http://localhost/__echo?token=nope"));
   assertEquals(bad.status, 403);
+  assertEquals(bad.headers.get("Cache-Control"), "no-store");
 
   const ok = await handler(
     new Request("http://localhost/__echo?token=s3cret&tags=posts:1"),

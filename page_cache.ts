@@ -151,21 +151,30 @@ export function createPageCache(options: PageCacheOptions): PageCache {
         if (echo !== undefined) {
           const url = new URL(req.url);
           if (url.pathname === echo.path) {
+            // Error responses carry no-store too: a proxy that cached one
+            // (405 is even heuristically cacheable per RFC 9111) could pin
+            // it in front of the echo route and block later purges.
+            const noStore = {
+              "Cache-Control": "no-store",
+              "X-LiteSpeed-Cache-Control": "no-cache",
+            };
             if (req.method !== "GET" && req.method !== "POST") {
               return new Response("method not allowed", {
                 status: 405,
-                headers: { "Allow": "GET, POST" },
+                headers: { ...noStore, "Allow": "GET, POST" },
               });
             }
-            if (!timingSafeEqual(url.searchParams.get("token") ?? "", echo.token)) {
-              return new Response("forbidden", { status: 403 });
+            if (
+              !timingSafeEqual(url.searchParams.get("token") ?? "", echo.token)
+            ) {
+              return new Response("forbidden", {
+                status: 403,
+                headers: noStore,
+              });
             }
             const tags = (url.searchParams.get("tags") ?? "")
               .split(",").map((t) => t.trim()).filter((t) => t !== "");
-            const headers = new Headers({
-              "Cache-Control": "no-store",
-              "X-LiteSpeed-Cache-Control": "no-cache",
-            });
+            const headers = new Headers(noStore);
             if (tags.length > 0) headers.set(echo.header, echo.value(tags));
             return new Response("purged", { headers });
           }
@@ -184,8 +193,10 @@ export function createPageCache(options: PageCacheOptions): PageCache {
         }
         if (cacheable) {
           const enc = new TextEncoder();
+          const overflows = (v: string) =>
+            enc.encode(v).length > maxHeaderBytes;
           let value = [...tags].join(separator);
-          if (enc.encode(value).length > maxHeaderBytes) {
+          if (overflows(value)) {
             emit({
               kind: "header-overflow",
               count: tags.size,
@@ -196,9 +207,12 @@ export function createPageCache(options: PageCacheOptions): PageCache {
             // would be the dangerous direction (a write to that table would
             // miss this page), so fall back to the wildcard bucket, which
             // every purge reaches. Safe over-purge.
-            if (enc.encode(value).length > maxHeaderBytes) {
-              value = withPrefix(WILDCARD);
-            }
+            if (overflows(value)) value = withPrefix(WILDCARD);
+            // Even the wildcard doesn't fit (tiny maxHeaderBytes, or a long
+            // tagPrefix/wildcardTag): a page cached without its tags could
+            // never be purged, so serve it uncached instead of emitting the
+            // oversized header maxHeaderBytes exists to prevent.
+            if (overflows(value)) return out;
           }
           out.headers.set(header, value);
           out.headers.set(

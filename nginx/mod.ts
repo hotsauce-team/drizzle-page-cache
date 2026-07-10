@@ -1,5 +1,5 @@
 /**
- * nginx entrypoint — the `drizzle-page-cache/surrogate-key` factory under
+ * nginx entrypoint — the `@hotsauce/drizzle-page-cache/surrogate-key` factory under
  * the name nginx users will look for. Stock nginx has no tag support, so it
  * pairs with the Lua helper in `nginx/purge.lua` (this directory), which
  * makes the proxy tag-aware and serves the dedicated `/__dpc/` purge
@@ -13,7 +13,7 @@
  * lifetime to configure or keep in sync in the nginx config.
  *
  * ```ts
- * import { createPageCache } from "drizzle-page-cache/nginx";
+ * import { createPageCache } from "@hotsauce/drizzle-page-cache/nginx";
  *
  * const pageCache = createPageCache({
  *   schema,

@@ -2,7 +2,7 @@
  * LiteSpeed / OpenLiteSpeed entrypoint — drizzle-adapter style:
  *
  * ```ts
- * import { createPageCache } from "drizzle-page-cache/litespeed";
+ * import { createPageCache } from "@hotsauce/drizzle-page-cache/litespeed";
  *
  * const pageCache = createPageCache({
  *   schema,
@@ -52,7 +52,7 @@ export function createPageCache(options: LiteSpeedPageCacheOptions): PageCache {
   const base = site.replace(/\/+$/, "");
   if (wildcardTag === "*") {
     throw new Error(
-      "drizzle-page-cache/litespeed: wildcardTag must not be '*' — a literal '*' purge flushes LiteSpeed's entire cache",
+      "@hotsauce/drizzle-page-cache/litespeed: wildcardTag must not be '*' — a literal '*' purge flushes LiteSpeed's entire cache",
     );
   }
 

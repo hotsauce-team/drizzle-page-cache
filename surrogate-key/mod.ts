@@ -3,7 +3,7 @@
  * drizzle-adapter style:
  *
  * ```ts
- * import { createPageCache } from "drizzle-page-cache/surrogate-key";
+ * import { createPageCache } from "@hotsauce/drizzle-page-cache/surrogate-key";
  *
  * const pageCache = createPageCache({
  *   schema,
@@ -14,7 +14,7 @@
  *
  * This is the dialect nginx, Angie, Fastly, and any CDN that accepts a
  * `Surrogate-Key` batch purge all speak — imported by product name via
- * `drizzle-page-cache/nginx` and `drizzle-page-cache/angie`, which are thin
+ * `@hotsauce/drizzle-page-cache/nginx` and `@hotsauce/drizzle-page-cache/angie`, which are thin
  * re-exports of this module.
  *
  * The wire contract:

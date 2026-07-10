@@ -1,5 +1,5 @@
 /**
- * Angie entrypoint — the `drizzle-page-cache/surrogate-key` factory under
+ * Angie entrypoint — the `@hotsauce/drizzle-page-cache/surrogate-key` factory under
  * the name Angie users will look for. Angie runs the same `nginx/purge.lua`
  * tag transport through its official `angie-module-lua` package (bundled in
  * the full Docker image; load `ndk_http_module.so` first) — see the
@@ -11,7 +11,7 @@
  * lifetime to configure or keep in sync in the Angie config.
  *
  * ```ts
- * import { createPageCache } from "drizzle-page-cache/angie";
+ * import { createPageCache } from "@hotsauce/drizzle-page-cache/angie";
  *
  * const pageCache = createPageCache({
  *   schema,

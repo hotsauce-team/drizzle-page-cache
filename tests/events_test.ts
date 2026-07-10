@@ -144,6 +144,24 @@ Deno.test("header-overflow falls back to wildcard when table tags still overflow
   assertEquals(res.headers.get("Surrogate-Key"), "*");
 });
 
+Deno.test("header-overflow: uncacheable when even the wildcard cannot fit", async () => {
+  const pageCache = createPageCache({
+    schema,
+    purge: new RecordingPurger(),
+    maxHeaderBytes: 3,
+    wildcardTag: "dpc-wild", // 8 bytes > 3 — nothing left that fits
+  });
+  const handler = pageCache.middleware(() => {
+    pageCache.tag("posts:7");
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  // A page cached without its tags could never be purged — so no tag
+  // header AND no cache headers: served fresh instead.
+  assertEquals(res.headers.get("Surrogate-Key"), null);
+  assertEquals(res.headers.get("Cache-Control"), null);
+});
+
 Deno.test("debug: true exposes X-Cache-Tags even on safety-gated responses", async () => {
   const base = createTestContext();
   const pageCache = createPageCache({
