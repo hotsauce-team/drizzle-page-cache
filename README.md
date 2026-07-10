@@ -400,16 +400,16 @@ Semantics worth knowing:
   client it is; `BYPASS` means exactly "a purge evicted this".
 - **`proxy_cache_key` must be declared as `$uri$is_args$args`** — the Lua helper
   mirrors that exact key string.
-- **Purge marks self-expire after `$dpc_tag_ttl` (default 86400s = one day).**
-  Since a purge is a mark ("refresh this entry on its next request") rather than
-  a deletion, and marks themselves expire, a mark that expires while the entry
-  it should evict is still cached means the purge is simply forgotten — the
-  stale page keeps serving until its TTL, with no error logged anywhere. So this
-  ceiling MUST exceed your longest `ttl` + `staleWhileRevalidate`. The default
-  one-day ceiling is safe for the default one-hour `ttl`; if you raise `ttl`
-  past a day, raise the ceiling with it: `set $dpc_tag_ttl <seconds>` in the
-  purge and serve locations. (Fastly and other tag-native `Surrogate-Key` CDNs
-  have no such limit.)
+- **Purge marks self-size — no lifetime to configure.** A mark ("refresh this
+  entry on its next request") must outlive every page it may need to invalidate,
+  so each purge carries the answer: the purger sends
+  `X-DPC-Mark-TTL: ttl + staleWhileRevalidate` and the Lua keeps the mark
+  exactly that long. The same app config that stamps page freshness sizes the
+  marks, so the two can't drift. Headerless purges (curl, ops tooling) are
+  remembered for 30 days; the purge response's `markTtl` field echoes what was
+  applied. One edge: a deploy that _lowers_ `ttl` leaves entries stamped under
+  the old, longer config under-covered by new marks — follow it with one
+  `POST /__dpc/purge_all`.
 - `proxy_hide_header Surrogate-Key` is fine (recommended in production — tags
   leak schema names): the log phase reads the upstream header, not the
   client-facing one.
