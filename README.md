@@ -72,8 +72,7 @@ npx jsr add @hotsauce/drizzle-page-cache    # Node / Bun (via JSR)
 
 **Contents:** [Installation](#installation) · [Quickstart](#quickstart) ·
 [Tag model](#tag-model) · [Purgers](#purgers) · [Observability](#observability)
-· [Namespacing](#namespacing-tagprefix) · [Development](#development) ·
-[Status](#status) · [License](#license)
+· [Namespacing](#namespacing-tagprefix) · [Development](#development) · [License](#license)
 
 ## Installation
 
