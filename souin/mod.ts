@@ -3,7 +3,7 @@
  * drizzle-adapter style:
  *
  * ```ts
- * import { createPageCache } from "drizzle-page-cache/souin";
+ * import { createPageCache } from "@hotsauce/drizzle-page-cache/souin";
  *
  * const pageCache = createPageCache({
  *   schema,

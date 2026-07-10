@@ -9,13 +9,26 @@ import type {
   PageCacheOptions,
 } from "./types.ts";
 
+/** Length-independent string comparison — avoids a timing oracle on the
+ * shared purge token. Zero-dep (no node:crypto), Web-standard only. */
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  // Fold the length difference into the accumulator so mismatched lengths
+  // still take the same code path.
+  let diff = ab.length ^ bb.length;
+  const len = Math.max(ab.length, bb.length);
+  for (let i = 0; i < len; i++) diff |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  return diff === 0;
+}
+
 export function createPageCache(options: PageCacheOptions): PageCache {
   const header = options.header ?? "Surrogate-Key";
   const separator = options.headerSeparator ?? " ";
   const ttl = options.ttl ?? 3600;
   const swr = options.staleWhileRevalidate ?? 30;
   const settleMs = options.settleMs ?? 50;
-  const exclude = options.exclude ?? ["/admin"];
   const prefix = options.tagPrefix ?? "";
   const wildcardTag = options.wildcardTag ?? WILDCARD;
   const maxHeaderBytes = options.maxHeaderBytes ?? 7900;
@@ -26,14 +39,19 @@ export function createPageCache(options: PageCacheOptions): PageCache {
     value: options.purgeEcho.value ??
       ((tags: readonly string[]) => tags.map((t) => `tag=${t}`).join(", ")),
   };
+  // Always enforced, on top of any custom shouldTag: the app's own
+  // non-shareable signals win — otherwise the header stamping below would
+  // turn a personalized response into a shared-cache entry. Mirrors what the
+  // Lua log() phase refuses to store.
+  const shareable = (res: Response): boolean => {
+    if (res.headers.has("Set-Cookie")) return false;
+    const cc = res.headers.get("Cache-Control")?.toLowerCase() ?? "";
+    // `=` catches the RFC 7234 qualified forms (private="x", no-cache="x")
+    // — this cache can't strip individual fields, so treat as non-shareable.
+    return !/(^|[\s,])(private|no-store|no-cache)([\s,;=]|$)/.test(cc);
+  };
   const shouldTag = options.shouldTag ??
-    ((req: Request, res: Response) => {
-      if (req.method !== "GET" || !res.ok) return false;
-      const path = new URL(req.url).pathname;
-      return !exclude.some((p) =>
-        path === p || path.startsWith(p.endsWith("/") ? p : `${p}/`)
-      );
-    });
+    ((req: Request, res: Response) => req.method === "GET" && res.ok);
 
   // -- events: silent by default except the two that can mean stale pages ----
   const seenWildcardReasons = new Set<string>();
@@ -89,6 +107,10 @@ export function createPageCache(options: PageCacheOptions): PageCache {
       pending.add(withPrefix(t));
       added = true;
     }
+    // Every purge also reaches the wildcard bucket: a page tagged `*`
+    // (opaque read, header overflow) may depend on ANY write, so any purge
+    // must evict it — the invariant the tag-model table promises.
+    if (added) pending.add(withPrefix(WILDCARD));
     if (added && timer === undefined) {
       timer = setTimeout(() => {
         timer = undefined;
@@ -129,15 +151,30 @@ export function createPageCache(options: PageCacheOptions): PageCache {
         if (echo !== undefined) {
           const url = new URL(req.url);
           if (url.pathname === echo.path) {
-            if (url.searchParams.get("token") !== echo.token) {
-              return new Response("forbidden", { status: 403 });
+            // Error responses carry no-store too: a proxy that cached one
+            // (405 is even heuristically cacheable per RFC 9111) could pin
+            // it in front of the echo route and block later purges.
+            const noStore = {
+              "Cache-Control": "no-store",
+              "X-LiteSpeed-Cache-Control": "no-cache",
+            };
+            if (req.method !== "GET" && req.method !== "POST") {
+              return new Response("method not allowed", {
+                status: 405,
+                headers: { ...noStore, "Allow": "GET, POST" },
+              });
+            }
+            if (
+              !timingSafeEqual(url.searchParams.get("token") ?? "", echo.token)
+            ) {
+              return new Response("forbidden", {
+                status: 403,
+                headers: noStore,
+              });
             }
             const tags = (url.searchParams.get("tags") ?? "")
               .split(",").map((t) => t.trim()).filter((t) => t !== "");
-            const headers = new Headers({
-              "Cache-Control": "no-store",
-              "X-LiteSpeed-Cache-Control": "no-cache",
-            });
+            const headers = new Headers(noStore);
             if (tags.length > 0) headers.set(echo.header, echo.value(tags));
             return new Response("purged", { headers });
           }
@@ -147,23 +184,35 @@ export function createPageCache(options: PageCacheOptions): PageCache {
         const res = await scope.run(tags, async () => await handler(req));
         if (tags.size === 0) return res;
 
-        const cacheable = shouldTag(req, res);
+        const cacheable = shareable(res) && shouldTag(req, res);
         if (!cacheable && !options.debug) return res;
 
         const out = new Response(res.body, res);
         if (options.debug) {
-          out.headers.set("X-Cache-Tags", [...tags].join(" "));
+          out.headers.set("X-Cache-Tags", [...tags].join(separator));
         }
         if (cacheable) {
+          const enc = new TextEncoder();
+          const overflows = (v: string) =>
+            enc.encode(v).length > maxHeaderBytes;
           let value = [...tags].join(separator);
-          if (value.length > maxHeaderBytes) {
-            const collapsed = collapse(tags);
+          if (overflows(value)) {
             emit({
               kind: "header-overflow",
               count: tags.size,
               path: new URL(req.url).pathname,
             });
-            value = collapsed.join(separator);
+            value = collapse(tags).join(separator);
+            // Even the collapsed table-tag set overflows — dropping any tag
+            // would be the dangerous direction (a write to that table would
+            // miss this page), so fall back to the wildcard bucket, which
+            // every purge reaches. Safe over-purge.
+            if (overflows(value)) value = withPrefix(WILDCARD);
+            // Even the wildcard doesn't fit (tiny maxHeaderBytes, or a long
+            // tagPrefix/wildcardTag): a page cached without its tags could
+            // never be purged, so serve it uncached instead of emitting the
+            // oversized header maxHeaderBytes exists to prevent.
+            if (overflows(value)) return out;
           }
           out.headers.set(header, value);
           out.headers.set(

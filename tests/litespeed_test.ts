@@ -102,5 +102,6 @@ Deno.test("end-to-end within middleware: write schedules litespeed-shaped purge"
   await db.update(posts).set({ title: "x" }).where(eq(posts.id, 3));
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purge.all, ["posts", "posts:3"]);
+  // The bucket flush arrives renamed — never a bare `*` toward LiteSpeed.
+  assertEquals(purge.all, ["dpc-wild", "posts", "posts:3"]);
 });

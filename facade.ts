@@ -27,10 +27,29 @@ const JOIN_METHODS = new Set([
   "fullJoin",
   "crossJoin",
 ]);
-const EXEC_METHODS = new Set(["execute", "all", "get", "values", "run"]);
+// Explicit executors that return a rows/result promise. NOT `values`: on an
+// insert builder `.values()` is a chain method producing the statement, so it
+// must stay a wrapped builder (awaiting it taps via the `then` handler; a
+// batch needs the real, un-executed builder). Eager-executing it here would
+// both run the insert early and hand `batch()` a non-builder.
+const EXEC_METHODS = new Set(["execute", "all", "get", "run"]);
 
 // deno-lint-ignore no-explicit-any
 type Any = any;
+
+/**
+ * Facade metadata hung off every wrapped builder so `db.batch([...])` can
+ * derive purges from its statements instead of blindly over-purging. Reads
+ * carry `{ write: false }` (recognized, no purge needed); writes carry a
+ * `tags()` closure returning their derived purge tags at call time. A
+ * statement WITHOUT this symbol (raw `sql`, RQB, or a builder made on the
+ * unwrapped db) is opaque → wildcard fallback. Local to this module.
+ */
+const BATCH_META = Symbol("drizzle-page-cache.batchMeta");
+interface BatchMeta {
+  write: boolean;
+  tags?: () => Set<string>;
+}
 
 export function wrapDb<TDb>(db: TDb, ctx: FacadeContext): TDb {
   return new Proxy(db as object, {
@@ -53,6 +72,52 @@ export function wrapDb<TDb>(db: TDb, ctx: FacadeContext): TDb {
         case "transaction":
           return (fn: Any, config: Any) =>
             runTransaction(target, fn, config, ctx);
+        case "batch":
+          // Only wrap when the driver actually implements batch — otherwise
+          // pass through so `db.batch` stays undefined and feature detection
+          // on the wrapped db keeps working.
+          if (typeof target.batch !== "function") {
+            return Reflect.get(target, prop, receiver);
+          }
+          // Root-level batch (sqlite-proxy / libsql / D1 / neon-http) runs an
+          // array of statements that never flow through the builder taps.
+          // Derive purges from each statement's facade metadata: recognized
+          // writes contribute their precise tags, recognized reads need no
+          // purge, and anything opaque (raw sql, RQB, or a builder made on
+          // the unwrapped db) falls back to the wildcard bucket + a loud
+          // warning — the safe direction. Purge only after the batch commits.
+          return (...args: Any[]) => {
+            const list = Array.isArray(args[0]) ? args[0] : undefined;
+            const tags = new Set<string>();
+            if (list === undefined) {
+              tags.add(WILDCARD);
+            } else {
+              for (const stmt of list) {
+                const meta = (stmt as Any)?.[BATCH_META] as
+                  | BatchMeta
+                  | undefined;
+                if (meta === undefined) tags.add(WILDCARD);
+                else if (meta.write && meta.tags) {
+                  for (const t of meta.tags()) tags.add(t);
+                }
+              }
+            }
+            return Promise.resolve(target.batch(...args)).then(
+              (result: unknown) => {
+                if (tags.size > 0) {
+                  if (tags.has(WILDCARD)) {
+                    ctx.emit(
+                      "unobserved-write",
+                      "db.batch() includes a statement the facade can't " +
+                        "observe — call purgeTags() for its writes",
+                    );
+                  }
+                  ctx.schedulePurge(tags);
+                }
+                return result;
+              },
+            );
+          };
         default: {
           const value = Reflect.get(target, prop, receiver);
           return typeof value === "function" ? value.bind(target) : value;
@@ -87,10 +152,13 @@ function wrapChain(
   builder: Any,
   tap: (result: unknown) => unknown,
   onMethod: (prop: string, args: Any[]) => void,
+  meta?: BatchMeta,
 ): Any {
   const wrapNode = (node: Any): Any =>
     new Proxy(node, {
       get(target: Any, prop) {
+        // Let db.batch() read this statement's purge metadata (see BATCH_META).
+        if (prop === BATCH_META) return meta;
         if (prop === "then") {
           return (onFulfilled?: Any, onRejected?: Any) =>
             target.then(
@@ -140,6 +208,9 @@ function wrapRead(builder: Any, ctx: FacadeContext): Any {
       if (JOIN_METHODS.has(prop)) tables.add(tableTagOf(args[0]));
       if (prop === "where") uniques.push(...findUniqueEqs(args[0]));
     },
+    // A read in a batch needs no purge; mark it recognized so it doesn't
+    // fall through to the wildcard bucket.
+    { write: false },
   );
 }
 
@@ -167,7 +238,15 @@ function readTags(
     // insert invalidates a cached 404.
     const pkKey = info.pkKeyByTable.get(primary);
     const row = rows[0] as Record<string, unknown> | undefined;
-    const pkValue = unique.viaPk ? unique.value : row?.[pkKey ?? ""];
+    // The returned row's own PK is authoritative. Only fall back to the WHERE
+    // param when there's no row (a miss — the intended row tag is still
+    // meaningful for a cached 404) or a single unambiguous unique equality
+    // (no OR/multi-eq that could have matched the row via a different arm).
+    const fromRow = row?.[pkKey ?? ""];
+    const pkValue = fromRow ??
+      (unique.viaPk && (rows.length === 0 || uniques.length === 1)
+        ? unique.value
+        : undefined);
     if (pkValue !== undefined) {
       tags.add(rowTag(primary, pkValue));
       if (rows.length === 0) tags.add(primary);
@@ -186,6 +265,24 @@ function readTags(
 
 // -- writes ---------------------------------------------------------------------
 
+/** Purge tags for a write: the table tag, plus a row tag per PK equality
+ * when the statement can be row-precise (update/delete by PK). */
+function writePurgeTags(
+  tableTag: string,
+  rowPrecise: boolean,
+  uniques: readonly UniqueEq[],
+): Set<string> {
+  const tags = new Set<string>([tableTag]);
+  if (rowPrecise) {
+    for (const u of uniques) {
+      if (u.viaPk && u.tableName === tableTag) {
+        tags.add(rowTag(u.tableName, u.value));
+      }
+    }
+  }
+  return tags;
+}
+
 function wrapWrite(
   builder: Any,
   ctx: FacadeContext,
@@ -197,23 +294,19 @@ function wrapWrite(
   return wrapChain(
     builder,
     (result) => {
-      const tags = new Set<string>([tableTag]);
       if (tableTag === WILDCARD) {
         ctx.emit("unobserved-write", "write against a non-table target");
       }
-      if (rowPrecise) {
-        for (const u of uniques) {
-          if (u.viaPk && u.tableName === tableTag) {
-            tags.add(rowTag(u.tableName, u.value));
-          }
-        }
-      }
-      ctx.schedulePurge(tags);
+      ctx.schedulePurge(writePurgeTags(tableTag, rowPrecise, uniques));
       return result;
     },
     (prop, args) => {
       if (prop === "where") uniques.push(...findUniqueEqs(args[0]));
     },
+    // Expose this write's purge tags so a batch can schedule them precisely
+    // without executing the statement individually. `uniques` is read at call
+    // time, after any .where() has populated it.
+    { write: true, tags: () => writePurgeTags(tableTag, rowPrecise, uniques) },
   );
 }
 

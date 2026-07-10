@@ -3,7 +3,7 @@
  * drizzle-adapter style:
  *
  * ```ts
- * import { createPageCache } from "drizzle-page-cache/xkey";
+ * import { createPageCache } from "@hotsauce/drizzle-page-cache/xkey";
  *
  * const pageCache = createPageCache({
  *   schema,
@@ -14,7 +14,7 @@
  *
  * Wires `varnishPurger`: one PURGE request to `site` carrying the tags in an
  * `xkey` header. This is the dialect Varnish's xkey vmod speaks — imported
- * by product name via `drizzle-page-cache/varnish`, a thin re-export of this
+ * by product name via `@hotsauce/drizzle-page-cache/varnish`, a thin re-export of this
  * module. Requires the xkey vmod and a VCL snippet handling PURGE
  * (`xkey.purge(req.http.xkey)`). For a custom purger, drop down to the root
  * `createPageCache`.
