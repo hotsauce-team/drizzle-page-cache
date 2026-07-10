@@ -54,7 +54,7 @@ Deno.test("souin entrypoint: site (+ default apiPath) wires the PURGE endpoint",
   assertEquals(calls[0].url, "http://localhost/souin-api/souin");
   assertEquals(calls[0].method, "PURGE");
   const keys = new Headers(calls[0].headers).get("Surrogate-Key") ?? "";
-  assertEquals(keys.split(", ").sort(), ["posts", "posts:3"]);
+  assertEquals(keys.split(", ").sort(), ["*", "posts", "posts:3"]);
 });
 
 Deno.test("varnish entrypoint: one PURGE to site with the xkey header", async () => {
@@ -68,7 +68,7 @@ Deno.test("varnish entrypoint: one PURGE to site with the xkey header", async ()
   assertEquals(calls[0].url, "http://localhost");
   assertEquals(calls[0].method, "PURGE");
   const keys = new Headers(calls[0].headers).get("xkey") ?? "";
-  assertEquals(keys.split(" ").sort(), ["posts", "posts:3"]);
+  assertEquals(keys.split(" ").sort(), ["*", "posts", "posts:3"]);
 });
 
 Deno.test("nginx entrypoint: one POST to the purge endpoint with tags in Surrogate-Key", async () => {
@@ -84,10 +84,12 @@ Deno.test("nginx entrypoint: one POST to the purge endpoint with tags in Surroga
   const headers = new Headers(calls[0].headers);
   assertEquals(
     (headers.get("Surrogate-Key") ?? "").split(" ").sort(),
-    ["posts", "posts:3"],
+    ["*", "posts", "posts:3"],
   );
   // No token option -> no token header.
   assertEquals(headers.get("X-Purge-Token"), null);
+  // Marks self-size: default ttl 3600 + swr 30.
+  assertEquals(headers.get("X-DPC-Mark-TTL"), "3630");
 });
 
 Deno.test("angie entrypoint: alias of nginx; purgePath/purgeToken wire through", async () => {
@@ -96,6 +98,8 @@ Deno.test("angie entrypoint: alias of nginx; purgePath/purgeToken wire through",
     site: "http://localhost",
     purgePath: "/_cache/purge",
     purgeToken: "s3cr3t",
+    ttl: 300,
+    staleWhileRevalidate: 15,
     settleMs: 1,
   });
   const calls = await writeAndFlush(pageCache);
@@ -105,9 +109,11 @@ Deno.test("angie entrypoint: alias of nginx; purgePath/purgeToken wire through",
   const headers = new Headers(calls[0].headers);
   assertEquals(
     (headers.get("Surrogate-Key") ?? "").split(" ").sort(),
-    ["posts", "posts:3"],
+    ["*", "posts", "posts:3"],
   );
   assertEquals(headers.get("X-Purge-Token"), "s3cr3t");
+  // Marks self-size from the configured page lifetime: 300 + 15.
+  assertEquals(headers.get("X-DPC-Mark-TTL"), "315");
 });
 
 Deno.test("entrypoints: `purge` is controlled and rejected at compile time", () => {

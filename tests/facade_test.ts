@@ -1,6 +1,16 @@
 import { assertEquals } from "@std/assert";
-import { eq } from "drizzle-orm";
-import { createTestContext, posts, tagsFor, users } from "./helpers.ts";
+import { eq, or } from "drizzle-orm";
+import { type FacadeContext, wrapDb } from "../facade.ts";
+import { analyzeSchema, WILDCARD } from "../derive.ts";
+import { createPageCache } from "../page_cache.ts";
+import {
+  createTestContext,
+  posts,
+  RecordingPurger,
+  schema,
+  tagsFor,
+  users,
+} from "./helpers.ts";
 
 Deno.test("entity read by PK → row tag only", async () => {
   const { db, pageCache } = createTestContext();
@@ -46,6 +56,29 @@ Deno.test("join adds the joined table tag", async () => {
       .limit(3);
   });
   assertEquals(tags, ["posts", "users"]);
+});
+
+Deno.test("entity matched by the non-PK arm of an OR tags the row's real PK", async () => {
+  const { db, pageCache } = createTestContext();
+  const tags = await tagsFor(pageCache, async () => {
+    // The PK arm (id=999) does not match; the unique arm (email) does →
+    // the row returned is user 2, so the tag must be users:2, not users:999.
+    const rows = await db.select().from(users).where(
+      or(eq(users.id, 999), eq(users.email, "user2@example.com")),
+    );
+    assertEquals(rows.length, 1);
+    assertEquals((rows[0] as { id: number }).id, 2);
+  });
+  assertEquals(tags, ["users:2"]);
+});
+
+Deno.test("partial select by PK stays row-precise when it is unambiguous", async () => {
+  const { db, pageCache } = createTestContext();
+  const tags = await tagsFor(pageCache, async () => {
+    // PK omitted from the result, but a single PK equality constrained it.
+    await db.select({ title: posts.title }).from(posts).where(eq(posts.id, 5));
+  });
+  assertEquals(tags, ["posts:5"]);
 });
 
 Deno.test("partial select omitting the PK degrades to table tag", async () => {
@@ -109,15 +142,15 @@ Deno.test("update by PK purges row + table tags after settle", async () => {
   await db.update(posts).set({ title: "edited" }).where(eq(posts.id, 7));
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts", "posts:7"]);
+  assertEquals(purger.all, ["*", "posts", "posts:7"]);
 });
 
-Deno.test("insert purges the table tag only", async () => {
+Deno.test("insert purges the table tag (+ the wildcard bucket)", async () => {
   const { db, pageCache, purger } = createTestContext();
   await db.insert(posts).values({ title: "new", body: "b", authorId: 1 });
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts"]);
+  assertEquals(purger.all, ["*", "posts"]);
 });
 
 Deno.test("delete by PK purges row + table tags", async () => {
@@ -125,7 +158,78 @@ Deno.test("delete by PK purges row + table tags", async () => {
   await db.delete(posts).where(eq(posts.id, 9));
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts", "posts:9"]);
+  assertEquals(purger.all, ["*", "posts", "posts:9"]);
+});
+
+Deno.test("db.batch() of fully-opaque statements warns + wildcard-purges", async () => {
+  const events: string[] = [];
+  const purged: string[] = [];
+  const ctx: FacadeContext = {
+    info: analyzeSchema(schema),
+    addTags: () => {},
+    schedulePurge: (tags) => {
+      for (const t of tags) purged.push(t);
+    },
+    emit: (kind) => events.push(kind),
+  };
+  let called = false;
+  const fakeDb = {
+    batch: (_stmts: unknown[]) => {
+      called = true;
+      return Promise.resolve([]);
+    },
+  };
+  const wrapped = wrapDb(fakeDb, ctx);
+  await wrapped.batch([1, 2]);
+  assertEquals(called, true);
+  assertEquals(events, ["unobserved-write"]);
+  assertEquals(purged, [WILDCARD]);
+});
+
+Deno.test("wrapping a db without batch leaves db.batch undefined", () => {
+  const ctx: FacadeContext = {
+    info: analyzeSchema(schema),
+    addTags: () => {},
+    schedulePurge: () => {},
+    emit: () => {},
+  };
+  const wrapped = wrapDb({}, ctx) as { batch?: unknown };
+  assertEquals(wrapped.batch, undefined);
+});
+
+Deno.test("db.batch of observed writes purges precise tags (no unobserved-write fallback)", async () => {
+  const { db, pageCache, purger } = createTestContext();
+  await db.batch([
+    db.update(posts).set({ title: "a" }).where(eq(posts.id, 3)),
+    db.insert(posts).values({ title: "n", body: "b", authorId: 1 }),
+  ]);
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  // Precise tags derived per statement; `*` here is only the bucket flush
+  // every purge carries, not the opaque-statement fallback.
+  assertEquals(purger.all, ["*", "posts", "posts:3"]);
+});
+
+Deno.test("db.batch with an unobservable statement adds the wildcard bucket", async () => {
+  const { db, raw, pageCache, purger } = createTestContext();
+  await db.batch([
+    db.update(posts).set({ title: "a" }).where(eq(posts.id, 3)), // observed
+    raw.update(users).set({ name: "x" }).where(eq(users.id, 1)), // opaque
+  ]);
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  assertEquals(purger.all, ["*", "posts", "posts:3"]);
+});
+
+Deno.test("db.batch of reads only needs no purge", async () => {
+  const { db, pageCache, purger } = createTestContext();
+  await db.batch([
+    db.select().from(posts).where(eq(posts.id, 3)),
+    db.select().from(users).limit(2),
+  ]);
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  assertEquals(purger.all, []);
 });
 
 Deno.test("update by non-PK column purges table tag (no false row precision)", async () => {
@@ -135,7 +239,7 @@ Deno.test("update by non-PK column purges table tag (no false row precision)", a
   );
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["users"]);
+  assertEquals(purger.all, ["*", "users"]);
 });
 
 Deno.test("purge batches are deduplicated across writes in the settle window", async () => {
@@ -146,5 +250,40 @@ Deno.test("purge batches are deduplicated across writes in the settle window", a
   await new Promise((r) => setTimeout(r, 30));
   await pageCache.flush();
   assertEquals(purger.batches.length, 1);
-  assertEquals(purger.batches[0], ["posts", "posts:1", "posts:2"]);
+  assertEquals(purger.batches[0], ["*", "posts", "posts:1", "posts:2"]);
+});
+
+// -- wildcard bucket: every purge must reach it (README tag-model table) ------
+
+Deno.test("every write purge also flushes the wildcard bucket", async () => {
+  const { db, pageCache, purger } = createTestContext();
+  await db.update(posts).set({ title: "x" }).where(eq(posts.id, 7));
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  // A page tagged * (opaque read) may depend on this write — the purge
+  // must reach the bucket, not just the precise tags.
+  assertEquals(purger.all, ["*", "posts", "posts:7"]);
+});
+
+Deno.test("manual purgeTags() flushes the wildcard bucket too", async () => {
+  const { pageCache, purger } = createTestContext();
+  pageCache.purgeTags("posts");
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  assertEquals(purger.all, ["*", "posts"]);
+});
+
+Deno.test("bucket purge respects wildcardTag rename and tagPrefix", async () => {
+  const purger = new RecordingPurger();
+  const pageCache = createPageCache({
+    schema,
+    purge: purger,
+    settleMs: 1,
+    wildcardTag: "dpc-wild",
+    tagPrefix: "shop_",
+  });
+  pageCache.purgeTags("posts");
+  await new Promise((r) => setTimeout(r, 5));
+  await pageCache.flush();
+  assertEquals(purger.all, ["shop_dpc-wild", "shop_posts"]);
 });

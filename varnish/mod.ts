@@ -1,12 +1,12 @@
 /**
- * Varnish entrypoint — the `drizzle-page-cache/xkey` factory under the name
+ * Varnish entrypoint — the `@hotsauce/drizzle-page-cache/xkey` factory under the name
  * Varnish users will look for. Wires `varnishPurger`: one PURGE request to
  * `site` carrying the tags in an `xkey` header. Requires the xkey vmod and a
  * VCL snippet handling PURGE (`xkey.purge(req.http.xkey)`) — see the full
  * dialect docs on `../xkey/mod.ts`.
  *
  * ```ts
- * import { createPageCache } from "drizzle-page-cache/varnish";
+ * import { createPageCache } from "@hotsauce/drizzle-page-cache/varnish";
  *
  * const pageCache = createPageCache({
  *   schema,

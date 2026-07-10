@@ -13,7 +13,7 @@ Deno.test("transaction: purges flush only after commit, as one batch", async () 
   await new Promise((r) => setTimeout(r, 10));
   await pageCache.flush();
   assertEquals(purger.batches.length, 1);
-  assertEquals(purger.batches[0], ["posts", "posts:1", "posts:2"]);
+  assertEquals(purger.batches[0], ["*", "posts", "posts:1", "posts:2"]);
 });
 
 Deno.test("transaction: rollback drops buffered purges", async () => {

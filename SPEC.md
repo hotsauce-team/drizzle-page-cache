@@ -49,8 +49,11 @@ Deno/Node/Bun (Workers via `nodejs_compat`).
   `.returning()` would alter user-visible result shapes — rejected).
 - **Request scope**: `AsyncLocalStorage`, opened by
   `pageCache.middleware(handler)`.
-- **Headers** (only when `shouldTag(req, res)` passes; default `GET` && 2xx &&
-  path not excluded): `Surrogate-Key: <tags>` and
+- **Headers** (only when the safety gate passes — no `Set-Cookie`, no
+  `private`/`no-store`/`no-cache` in `Cache-Control`; always enforced, the
+  app's non-shareable signals win — AND the `shouldTag(req, res)` policy
+  passes; default `GET` && 2xx, overridable to exclude paths or cache 404s):
+  `Surrogate-Key: <tags>` and
   `Cache-Control: max-age=0, s-maxage=<ttl>, stale-while-revalidate=<n>`.
   `max-age=0` is non-negotiable — browsers cannot be purged.
 - **Purge queue**: deduplicated, debounced (`settleMs`); **transaction-aware** —
@@ -98,7 +101,7 @@ Deno/Node/Bun (Workers via `nodejs_compat`).
 Full matrix: PK read hit/miss, unique-column read, RQB findMany/findFirst, list
 reads, partial selects, update/delete by PK, insert, joined reads, tx
 commit/rollback buffering, concurrent-request ALS isolation, header hygiene (no
-tags on POST / errors / excluded paths), the lazy-thenable regression.
+tags on POST / errors / safety-gated responses), the lazy-thenable regression.
 
 ## e2e (e2e/)
 

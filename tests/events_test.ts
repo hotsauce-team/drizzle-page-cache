@@ -30,7 +30,11 @@ Deno.test("purge-batch event fires with the flushed tags", async () => {
   await pageCache.flush();
   const batch = events.find((e) => e.kind === "purge-batch");
   assertEquals(batch?.kind, "purge-batch");
-  assertEquals([...(batch!.tags as string[])].sort(), ["posts", "posts:2"]);
+  assertEquals([...(batch!.tags as string[])].sort(), [
+    "*",
+    "posts",
+    "posts:2",
+  ]);
 });
 
 Deno.test("purge-error event fires when the purger throws", async () => {
@@ -53,7 +57,10 @@ Deno.test("purge-error event fires when the purger throws", async () => {
   await pageCache.flush();
   const err = events.find((e) => e.kind === "purge-error");
   assertEquals(err?.kind, "purge-error");
-  assertEquals((err as { tags: readonly string[] }).tags, ["posts"]);
+  assertEquals(
+    [...(err as { tags: readonly string[] }).tags].sort(),
+    ["*", "posts"],
+  );
 });
 
 Deno.test("wildcard-tag event fires once per reason (deduplicated)", async () => {
@@ -104,7 +111,58 @@ Deno.test("header-overflow collapses row tags to table tags and emits", async ()
   assertEquals(events.filter((e) => e.kind === "header-overflow").length, 1);
 });
 
-Deno.test("debug: true exposes X-Cache-Tags even on excluded paths", async () => {
+Deno.test("maxHeaderBytes measures bytes, not UTF-16 code units", async () => {
+  const events: PageCacheEvent[] = [];
+  const pageCache = createPageCache({
+    schema,
+    purge: new RecordingPurger(),
+    maxHeaderBytes: 12,
+    onEvent: (e) => events.push(e),
+  });
+  const handler = pageCache.middleware(() => {
+    // "posts:日本語" is 9 code units but 15 UTF-8 bytes. A char-count check
+    // (9 <= 12) would let it through; a byte-count check (15 > 12) overflows.
+    pageCache.tag("posts:日本語");
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  assertEquals(res.headers.get("Surrogate-Key"), "posts");
+  assertEquals(events.filter((e) => e.kind === "header-overflow").length, 1);
+});
+
+Deno.test("header-overflow falls back to wildcard when table tags still overflow", async () => {
+  const pageCache = createPageCache({
+    schema,
+    purge: new RecordingPurger(),
+    maxHeaderBytes: 3,
+  });
+  const handler = pageCache.middleware(() => {
+    pageCache.tag("posts:7"); // collapses to "posts" (5 bytes), still > 3
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  assertEquals(res.headers.get("Surrogate-Key"), "*");
+});
+
+Deno.test("header-overflow: uncacheable when even the wildcard cannot fit", async () => {
+  const pageCache = createPageCache({
+    schema,
+    purge: new RecordingPurger(),
+    maxHeaderBytes: 3,
+    wildcardTag: "dpc-wild", // 8 bytes > 3 — nothing left that fits
+  });
+  const handler = pageCache.middleware(() => {
+    pageCache.tag("posts:7");
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  // A page cached without its tags could never be purged — so no tag
+  // header AND no cache headers: served fresh instead.
+  assertEquals(res.headers.get("Surrogate-Key"), null);
+  assertEquals(res.headers.get("Cache-Control"), null);
+});
+
+Deno.test("debug: true exposes X-Cache-Tags even on safety-gated responses", async () => {
   const base = createTestContext();
   const pageCache = createPageCache({
     schema,
@@ -114,9 +172,11 @@ Deno.test("debug: true exposes X-Cache-Tags even on excluded paths", async () =>
   const db = pageCache.wrap(base.raw);
   const handler = pageCache.middleware(async () => {
     await db.select().from(posts).where(eq(posts.id, 4));
-    return new Response("admin page");
+    return new Response("account page", {
+      headers: { "Set-Cookie": "sid=abc" },
+    });
   });
-  const res = await handler(new Request("http://localhost/admin/posts/4"));
+  const res = await handler(new Request("http://localhost/account/posts/4"));
   assertEquals(res.headers.get("X-Cache-Tags"), "posts:4");
   assertEquals(res.headers.get("Surrogate-Key"), null); // still not cacheable
 });
@@ -149,7 +209,13 @@ Deno.test("tagPrefix namespaces derived tags, manual tags, and purges", async ()
   pageCache.purgeTags("custom");
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["shop_custom", "shop_posts", "shop_posts:7"]);
+  // The wildcard-bucket tag is prefixed too, so reads and purges agree.
+  assertEquals(purger.all, [
+    "shop_*",
+    "shop_custom",
+    "shop_posts",
+    "shop_posts:7",
+  ]);
 });
 
 Deno.test("tagPrefix applies to the wildcard bucket too", async () => {
