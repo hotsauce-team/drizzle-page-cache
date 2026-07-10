@@ -14,6 +14,11 @@
 --   POST /__dpc/purge/<tag>                             single tag (curl)
 --   POST /__dpc/purge_all                               flush everything
 --
+-- A purge may carry `X-DPC-Mark-TTL: <seconds>` — how long its marks are
+-- remembered. The package's nginxPurger always sends its page
+-- `ttl + staleWhileRevalidate`; headerless purges get MARK_TTL_CAP (30
+-- days). The response echoes the applied value as `markTtl`.
+--
 -- (`PURGE` is accepted as a method alias; anything else gets 405. Mount
 -- the location under any prefix — routing keys off the trailing segments.)
 -- A purge marks each tag with a fresh generation; later requests whose
@@ -52,10 +57,10 @@
 --
 --   http {
 --     # Tag -> generation purge marks. Eviction here would silently drop
---     # a purge record (stale until TTL), so size it generously; entries
---     # self-expire after $dpc_tag_ttl (default 86400s). If your page `ttl`
---     # + `staleWhileRevalidate` can exceed a day, raise it in BOTH the
---     # purge and serve locations: `set $dpc_tag_ttl 172800;`.
+--     # a purge record (stale until TTL), so size it generously. Marks
+--     # self-size from the purge request's X-DPC-Mark-TTL header (the
+--     # package's purger sends its ttl + staleWhileRevalidate); headerless
+--     # purges are remembered for 30 days.
 --     lua_shared_dict dpc_tags 4m;
 --     # Cache key -> stored generation + tags. Eviction/expiry only costs
 --     # an extra bypass, so LRU pressure is safe.
@@ -99,12 +104,17 @@ local GEN_KEY = "gen"
 local ALL_KEY = "all"
 -- Tag marks self-expire: a purge only matters for entries stored before
 -- it, and no entry outlives its own s-maxage + stale-while-revalidate.
--- This ceiling MUST exceed your longest page TTL + SWR or expired marks
--- serve stale. Override per deployment with `set $dpc_tag_ttl <seconds>`
--- in the purge/serve locations when you raise `ttl` past the default day.
-local DEFAULT_TAG_TTL = 86400
-local function tag_ttl()
-  return tonumber(ngx.var.dpc_tag_ttl) or DEFAULT_TAG_TTL
+-- The purger states that lifetime per purge (`X-DPC-Mark-TTL`: its
+-- `ttl + staleWhileRevalidate`), so the same app config that stamps page
+-- freshness also sizes the marks that must outlive it — the two cannot
+-- drift. Headerless purges (curl, ops tooling) fall back to the cap:
+-- maximal safety, cheap because they are rare. High-volume clients other
+-- than drizzle-page-cache's purger should send the header.
+local MARK_TTL_CAP = 30 * 86400
+local function mark_ttl()
+  local h = tonumber(ngx.req.get_headers()["x-dpc-mark-ttl"])
+  if h and h > 0 and h < MARK_TTL_CAP then return math.ceil(h) end
+  return MARK_TTL_CAP
 end
 -- Safety margin on key records beyond the entry's own freshness lifetime.
 local KEY_TTL_SLACK = 60
@@ -127,8 +137,8 @@ local function reply(status, body)
   return ngx.exit(status)
 end
 
-local function mark(tags_dict, dict_key, gen)
-  local ok, err, forcible = tags_dict:set(dict_key, gen, tag_ttl())
+local function mark(tags_dict, dict_key, gen, ttl)
+  local ok, err, forcible = tags_dict:set(dict_key, gen, ttl)
   if not ok then
     ngx.log(ngx.ERR, "dpc purge: mark set failed: ", err)
     return false
@@ -202,12 +212,13 @@ function M.purge()
       '{"status":"error","error":"generation incr failed"}'
     )
   end
+  local ttl = mark_ttl()
   local failed = false
   if all then
-    failed = not mark(tags_dict, ALL_KEY, gen)
+    failed = not mark(tags_dict, ALL_KEY, gen, ttl)
   else
     for _, tag in ipairs(tags) do
-      if not mark(tags_dict, tag_key(tag), gen) then failed = true end
+      if not mark(tags_dict, tag_key(tag), gen, ttl) then failed = true end
     end
   end
   if failed then
@@ -216,10 +227,12 @@ function M.purge()
       '{"status":"error","error":"mark set failed"}'
     )
   end
+  -- markTtl echoes the applied lifetime so headerless callers can see
+  -- what they got (and tests can assert both branches without waiting).
   return reply(
     ngx.HTTP_OK,
-    all and '{"status":"ok","purged":"all"}'
-      or ('{"status":"ok","purged":' .. #tags .. "}")
+    all and ('{"status":"ok","purged":"all","markTtl":' .. ttl .. "}")
+      or ('{"status":"ok","purged":' .. #tags .. ',"markTtl":' .. ttl .. "}")
   )
 end
 

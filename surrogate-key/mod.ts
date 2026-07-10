@@ -53,11 +53,11 @@
  *   means exactly "a purge evicted this";
  * - `proxy_cache_key` MUST be declared as `$uri$is_args$args` — `purge.lua`
  *   mirrors that exact key string.
- * - purge marks self-expire after `$dpc_tag_ttl` (default 86400s). This
- *   ceiling MUST exceed your longest `ttl` + `staleWhileRevalidate`, or a
- *   mark can expire before the entry it should evict → silent staleness.
- *   If you raise `ttl` past a day, set `$dpc_tag_ttl` accordingly in the
- *   nginx/Angie config (Fastly and other Surrogate-Key CDNs are unaffected).
+ * - purge marks self-size: every purge from this entrypoint carries
+ *   `X-DPC-Mark-TTL: ttl + staleWhileRevalidate`, so a mark lives exactly
+ *   as long as the oldest page it may need to invalidate — nothing to keep
+ *   in sync in the nginx/Angie config. Headerless purges (curl/ops) are
+ *   remembered for 30 days, the Lua's cap.
  *
  * For a custom purger, drop down to the root `createPageCache`.
  */
@@ -86,6 +86,10 @@ export function createPageCache(
     purge: nginxPurger(site.replace(/\/+$/, ""), {
       path: purgePath,
       token: purgeToken,
+      // A mark must outlive every page it may need to invalidate; state
+      // the page lifetime so the Lua sizes marks exactly (defaults mirror
+      // page_cache.ts).
+      markTtl: (rest.ttl ?? 3600) + (rest.staleWhileRevalidate ?? 30),
     }),
   });
 }

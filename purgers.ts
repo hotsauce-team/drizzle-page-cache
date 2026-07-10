@@ -75,7 +75,16 @@ export const DEFAULT_NGINX_PURGE_PATH = "/__dpc/purge";
  */
 export function nginxPurger(
   base: string,
-  options?: { path?: string; token?: string },
+  options?: {
+    path?: string;
+    token?: string;
+    /** How long the endpoint remembers each purge mark, seconds — pass
+     * your page `ttl + staleWhileRevalidate` so a mark lives exactly as
+     * long as the oldest page it may need to invalidate (the dialect
+     * entrypoints do this automatically). Omitted, the Lua falls back to
+     * its 30-day cap — safe, and fine for low-volume purging. */
+    markTtl?: number;
+  },
 ): Purger {
   const url = base + (options?.path ?? DEFAULT_NGINX_PURGE_PATH);
   return {
@@ -85,6 +94,9 @@ export function nginxPurger(
       };
       if (options?.token !== undefined) {
         headers["X-Purge-Token"] = options.token;
+      }
+      if (options?.markTtl !== undefined) {
+        headers["X-DPC-Mark-TTL"] = String(Math.ceil(options.markTtl));
       }
       const res = await fetch(url, { method: "POST", headers });
       if (!res.ok) throw new Error(`nginx purge: ${res.status}`);
