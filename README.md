@@ -3,6 +3,9 @@
 Tag-based HTTP page-cache invalidation for
 [Drizzle ORM](https://orm.drizzle.team) apps.
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Runtimes: Deno · Node · Bun](https://img.shields.io/badge/runtimes-Deno%20%C2%B7%20Node%20%C2%B7%20Bun-lightgrey.svg)](#installation)
+
 Put any Drizzle app behind a tag-aware HTTP cache (OpenLiteSpeed, Caddy/Souin,
 Varnish xkey, Fastly — or plain nginx/Angie made tag-aware by this package's Lua
 helper) and get **automatic, event-driven invalidation**: cache tags are derived
@@ -19,11 +22,35 @@ response header, and purged when writes touch the same tables or rows.
   one re-render; a missed tag would serve stale content, so that direction never
   happens.
 
+**Contents:** [Installation](#installation) · [Quickstart](#quickstart) ·
+[Tag model](#tag-model) · [Purgers](#purgers) · [Observability](#observability)
+· [Namespacing](#namespacing-tagprefix) · [Development](#development) ·
+[Status](#status) · [License](#license)
+
+## Installation
+
+```bash
+# Deno
+deno add jsr:@hotsauce/drizzle-page-cache
+
+# Node / Bun
+npm install drizzle-page-cache
+```
+
+`drizzle-orm` (>=0.44 <1) is a peer dependency — you already have it. Nothing
+else is pulled in.
+
+Works on Deno, Node ≥ 18, and Bun. Cloudflare Workers needs the
+[`nodejs_compat`](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)
+flag (for `AsyncLocalStorage`). Code samples below use the npm specifier
+`drizzle-page-cache/...`; on Deno/JSR the same entrypoints live under
+`@hotsauce/drizzle-page-cache/...`.
+
 ## Quickstart
 
 ```ts
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { createPageCache } from "@hotsauce/drizzle-page-cache/souin";
+import { createPageCache } from "drizzle-page-cache/souin";
 
 const pageCache = createPageCache({
   schema,
@@ -317,17 +344,24 @@ are already globally unique, and table-tag purges crossing tenants only
 over-purge, which is the safe direction. Per-request (dynamic) prefixes are a
 possible future addition if per-tenant table tags ever matter.
 
-## Status
+## Development
 
-v0.1 — core mechanism with the test matrix in `tests/`. See `SPEC.md` for the
-full design, verified constraints of drizzle-orm 0.45.x, and the roadmap (nested
-relation tags, Upstash `Cache` composition); see `BENCHMARKS.md` for the
-five-stack cache comparison and findings. The e2e purge loop in `e2e/` passes on
-**OpenLiteSpeed** (header-driven purging via the litespeed entrypoint's
-`purgeEcho` + `litespeedPurger`), on **Caddy/Souin** — same app on Deno, Node
-24, and Bun (the Node entry is a ~40-line `node:http` adapter, Bun needs none,
-and only the demo's sqlite backend differs per runtime) — and on **Angie** and
-**plain nginx** (tag purging via the nginx/angie entrypoints + the Lua helper
-`nginx/purge.lua`); Varnish + Hitch is a benchmark-only pairing.
-`cd e2e && ./verify.sh all` runs the whole sweep with live step output and a
-PASS/FAIL summary.
+Deno-first repo; the npm package is generated from it by
+[dnt](https://github.com/denoland/dnt).
+
+```bash
+deno task test        # unit test matrix (tests/)
+deno task check       # typecheck all entrypoints
+deno task build:npm   # build the npm package into ./npm
+
+cd e2e && ./verify.sh all   # full write → tag-purge sweep against real proxies
+cd e2e && ./bench.sh        # rerun the BENCHMARKS.md measurements
+```
+
+The e2e suite needs Docker; it brings the proxy stack up and down itself
+(`e2e/docker-compose.yml`). Issues and PRs welcome — a failing test or a
+`verify.sh` transcript is the fastest way to get a bug fixed.
+
+## License
+
+[MIT](LICENSE) © Hotsauce Team
