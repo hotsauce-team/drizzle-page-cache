@@ -15,7 +15,7 @@ Deno.test("cacheable GET gets Surrogate-Key and Cache-Control headers", async ()
     return new Response("<html>post 3</html>");
   });
   const res = await handler(new Request("http://localhost/post/3"));
-  assertEquals(res.headers.get("Surrogate-Key"), "posts:3");
+  assertEquals(res.headers.get("Surrogate-Key"), "posts:3 dpc-all");
   assertStringIncludes(res.headers.get("Cache-Control") ?? "", "max-age=0");
   assertStringIncludes(res.headers.get("Cache-Control") ?? "", "s-maxage=3600");
   assertEquals(await res.text(), "<html>post 3</html>");
@@ -84,7 +84,7 @@ Deno.test('GET with qualified Cache-Control: no-cache="set-cookie" is not tagged
 Deno.test("purge-echo route gates on method and token", async () => {
   const pageCache = createPageCache({
     schema,
-    purge: new RecordingPurger(),
+    purger: new RecordingPurger(),
     purgeEcho: { token: "s3cret", path: "/__echo" },
   });
   const handler = pageCache.middleware(() => new Response("app"));
@@ -116,7 +116,7 @@ Deno.test("no built-in path exclusion: a clean GET under /admin is tagged", asyn
     return new Response("admin list");
   });
   const res = await handler(new Request("http://localhost/admin/posts"));
-  assertEquals(res.headers.get("Surrogate-Key"), "posts");
+  assertEquals(res.headers.get("Surrogate-Key"), "posts dpc-all");
 });
 
 Deno.test("custom shouldTag can exclude paths", async () => {
@@ -132,7 +132,7 @@ Deno.test("custom shouldTag can exclude paths", async () => {
   const admin = await handler(new Request("http://localhost/admin/posts"));
   assertEquals(admin.headers.get("Surrogate-Key"), null);
   const pub = await handler(new Request("http://localhost/posts"));
-  assertEquals(pub.headers.get("Surrogate-Key"), "posts");
+  assertEquals(pub.headers.get("Surrogate-Key"), "posts dpc-all");
 });
 
 Deno.test("safety gate wins over a permissive shouldTag", async () => {
@@ -162,7 +162,7 @@ Deno.test("shouldTag widened to 404s tags an entity miss", async () => {
   const res = await handler(new Request("http://localhost/post/999"));
   // miss on unique equality → row tag + table tag, so creating post 999
   // later purges this cached 404
-  assertEquals(res.headers.get("Surrogate-Key"), "posts:999 posts");
+  assertEquals(res.headers.get("Surrogate-Key"), "posts:999 posts dpc-all");
 });
 
 Deno.test("untagged responses pass through untouched", async () => {
@@ -188,8 +188,8 @@ Deno.test("concurrent requests get isolated tag sets", async () => {
     handler(new Request("http://localhost/p?id=2")),
     handler(new Request("http://localhost/p?id=0")),
   ]);
-  assertEquals(a.headers.get("Surrogate-Key"), "posts:1");
-  assertEquals(b.headers.get("Surrogate-Key"), "posts:2");
+  assertEquals(a.headers.get("Surrogate-Key"), "posts:1 dpc-all");
+  assertEquals(b.headers.get("Surrogate-Key"), "posts:2 dpc-all");
   assertEquals(c.headers.get("Surrogate-Key"), null);
 });
 
@@ -202,6 +202,7 @@ Deno.test("manual tag() adds to the current request scope", async () => {
   const res = await handler(new Request("http://localhost/p"));
   assertEquals(res.headers.get("Surrogate-Key")?.split(" ").sort(), [
     "custom",
+    "dpc-all",
     "posts:42",
   ]);
 });

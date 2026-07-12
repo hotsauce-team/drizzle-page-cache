@@ -8,7 +8,11 @@
  * See README.md for the tag model and SPEC.md for the design.
  */
 
-export { createPageCache } from "./page_cache.ts";
+export {
+  createPageCache,
+  DEFAULT_ALL_TAG,
+  DEFAULT_UNKNOWN_TAG,
+} from "./page_cache.ts";
 export {
   litespeedPurger,
   nginxPurger,
@@ -16,7 +20,6 @@ export {
   varnishPurger,
   webhookPurger,
 } from "./purgers.ts";
-export { WILDCARD } from "./derive.ts";
 export type {
   Handler,
   PageCache,

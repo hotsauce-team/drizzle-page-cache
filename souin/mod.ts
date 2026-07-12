@@ -20,13 +20,14 @@
  */
 
 import { createPageCache as createCorePageCache } from "../page_cache.ts";
-import { souinPurger } from "../purgers.ts";
+import { normalizeSite, souinPurger } from "../purgers.ts";
 import type { PageCache, PageCacheOptions } from "../types.ts";
 
 /** Souin's default API endpoint path. */
 export const DEFAULT_SOUIN_API_PATH = "/souin-api/souin";
 
-export interface SouinPageCacheOptions extends Omit<PageCacheOptions, "purge"> {
+export interface SouinPageCacheOptions
+  extends Omit<PageCacheOptions, "purger"> {
   /** The proxy's base URL, e.g. `http://localhost` — no trailing slash. */
   site: string;
   /** Souin API path on that host. Default `/souin-api/souin`. */
@@ -35,10 +36,10 @@ export interface SouinPageCacheOptions extends Omit<PageCacheOptions, "purge"> {
 
 export function createPageCache(options: SouinPageCacheOptions): PageCache {
   const { site, apiPath, ...rest } = options;
-  const base = site.replace(/\/+$/, "");
+  const base = normalizeSite(site);
   return createCorePageCache({
     ...rest,
-    purge: souinPurger(`${base}${apiPath ?? DEFAULT_SOUIN_API_PATH}`),
+    purger: souinPurger(`${base}${apiPath ?? DEFAULT_SOUIN_API_PATH}`),
   });
 }
 

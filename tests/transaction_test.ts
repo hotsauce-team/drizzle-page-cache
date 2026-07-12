@@ -13,7 +13,7 @@ Deno.test("transaction: purges flush only after commit, as one batch", async () 
   await new Promise((r) => setTimeout(r, 10));
   await pageCache.flush();
   assertEquals(purger.batches.length, 1);
-  assertEquals(purger.batches[0], ["*", "posts", "posts:1", "posts:2"]);
+  assertEquals(purger.batches[0], ["dpc-unknown", "posts", "posts:1", "posts:2"]);
 });
 
 Deno.test("transaction: rollback drops buffered purges", async () => {
@@ -38,5 +38,5 @@ Deno.test("transaction: reads inside a tx still tag the request scope", async ()
     return new Response("ok");
   });
   const res = await handler(new Request("http://localhost/p"));
-  assertEquals(res.headers.get("Surrogate-Key"), "posts:5");
+  assertEquals(res.headers.get("Surrogate-Key"), "posts:5 dpc-all");
 });

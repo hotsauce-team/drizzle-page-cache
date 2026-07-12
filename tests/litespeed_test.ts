@@ -9,19 +9,19 @@ import {
   schema,
 } from "./helpers.ts";
 
-function litespeedCache(purge = new RecordingPurger()) {
+function litespeedCache(purger = new RecordingPurger()) {
   const base = createTestContext();
   const pageCache = createPageCache({
     schema,
-    purge,
+    purger,
     settleMs: 1,
     header: "X-LiteSpeed-Tag",
     headerSeparator: ",",
     cacheHeaders: { "X-LiteSpeed-Cache-Control": "public, max-age=300" },
-    wildcardTag: "dpc-wild",
+    unknownTag: "dpc-wild",
     purgeEcho: { token: "secret" },
   });
-  return { db: pageCache.wrap(base.raw), pageCache, purge };
+  return { db: pageCache.wrap(base.raw), pageCache, purger };
 }
 
 Deno.test("litespeed headers: tag header, comma separator, cache-control", async () => {
@@ -32,7 +32,7 @@ Deno.test("litespeed headers: tag header, comma separator, cache-control", async
     return new Response("ok");
   });
   const res = await handler(new Request("http://localhost/p"));
-  assertEquals(res.headers.get("X-LiteSpeed-Tag"), "posts,custom");
+  assertEquals(res.headers.get("X-LiteSpeed-Tag"), "posts,custom,dpc-all");
   assertEquals(
     res.headers.get("X-LiteSpeed-Cache-Control"),
     "public, max-age=300",
@@ -40,19 +40,19 @@ Deno.test("litespeed headers: tag header, comma separator, cache-control", async
   assertEquals(res.headers.get("Surrogate-Key"), null);
 });
 
-Deno.test("wildcardTag renames * on responses AND purges (never a bare *)", async () => {
-  const { db, pageCache, purge } = litespeedCache();
+Deno.test("unknownTag renames the bucket on responses AND purges (never a bare *)", async () => {
+  const { db, pageCache, purger } = litespeedCache();
   const handler = pageCache.middleware(async () => {
     await db.select({ n: sql<number>`1` }).from(sql`(select 1)`); // opaque read
     return new Response("ok");
   });
   const res = await handler(new Request("http://localhost/p"));
-  assertEquals(res.headers.get("X-LiteSpeed-Tag"), "dpc-wild");
+  assertEquals(res.headers.get("X-LiteSpeed-Tag"), "dpc-wild,dpc-all");
 
-  pageCache.purgeTags("*");
+  pageCache.purgeBatch("custom"); // every batch carries the renamed bucket
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purge.all, ["dpc-wild"]);
+  assertEquals(purger.all, ["custom", "dpc-wild"]);
 });
 
 Deno.test("purge-echo route: 403 without token, purge header with it, never cacheable", async () => {
@@ -98,10 +98,10 @@ Deno.test("litespeedPurger fetches the echo route through the proxy URL", async 
 });
 
 Deno.test("end-to-end within middleware: write schedules litespeed-shaped purge", async () => {
-  const { db, pageCache, purge } = litespeedCache();
+  const { db, pageCache, purger } = litespeedCache();
   await db.update(posts).set({ title: "x" }).where(eq(posts.id, 3));
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
   // The bucket flush arrives renamed — never a bare `*` toward LiteSpeed.
-  assertEquals(purge.all, ["dpc-wild", "posts", "posts:3"]);
+  assertEquals(purger.all, ["dpc-wild", "posts", "posts:3"]);
 });

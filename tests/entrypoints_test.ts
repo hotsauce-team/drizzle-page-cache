@@ -54,7 +54,7 @@ Deno.test("souin entrypoint: site (+ default apiPath) wires the PURGE endpoint",
   assertEquals(calls[0].url, "http://localhost/souin-api/souin");
   assertEquals(calls[0].method, "PURGE");
   const keys = new Headers(calls[0].headers).get("Surrogate-Key") ?? "";
-  assertEquals(keys.split(", ").sort(), ["*", "posts", "posts:3"]);
+  assertEquals(keys.split(", ").sort(), ["dpc-unknown", "posts", "posts:3"]);
 });
 
 Deno.test("varnish entrypoint: one PURGE to site with the xkey header", async () => {
@@ -68,7 +68,7 @@ Deno.test("varnish entrypoint: one PURGE to site with the xkey header", async ()
   assertEquals(calls[0].url, "http://localhost");
   assertEquals(calls[0].method, "PURGE");
   const keys = new Headers(calls[0].headers).get("xkey") ?? "";
-  assertEquals(keys.split(" ").sort(), ["*", "posts", "posts:3"]);
+  assertEquals(keys.split(" ").sort(), ["dpc-unknown", "posts", "posts:3"]);
 });
 
 Deno.test("nginx entrypoint: one POST to the purge endpoint with tags in Surrogate-Key", async () => {
@@ -84,7 +84,7 @@ Deno.test("nginx entrypoint: one POST to the purge endpoint with tags in Surroga
   const headers = new Headers(calls[0].headers);
   assertEquals(
     (headers.get("Surrogate-Key") ?? "").split(" ").sort(),
-    ["*", "posts", "posts:3"],
+    ["dpc-unknown", "posts", "posts:3"],
   );
   // No token option -> no token header.
   assertEquals(headers.get("X-Purge-Token"), null);
@@ -109,7 +109,7 @@ Deno.test("angie entrypoint: alias of nginx; purgePath/purgeToken wire through",
   const headers = new Headers(calls[0].headers);
   assertEquals(
     (headers.get("Surrogate-Key") ?? "").split(" ").sort(),
-    ["*", "posts", "posts:3"],
+    ["dpc-unknown", "posts", "posts:3"],
   );
   assertEquals(headers.get("X-Purge-Token"), "s3cr3t");
   // Marks self-size from the configured page lifetime: 300 + 15.
@@ -121,26 +121,26 @@ Deno.test("entrypoints: `purge` is controlled and rejected at compile time", () 
   const _souin: Parameters<typeof createSouinPageCache>[0] = {
     schema,
     site: "http://localhost",
-    // @ts-expect-error — `purge` is wired by the souin entrypoint
-    purge: noopPurger,
+    // @ts-expect-error — `purger` is wired by the souin entrypoint
+    purger: noopPurger,
   };
   const _varnish: Parameters<typeof createVarnishPageCache>[0] = {
     schema,
     site: "http://localhost",
-    // @ts-expect-error — `purge` is wired by the varnish entrypoint
-    purge: noopPurger,
+    // @ts-expect-error — `purger` is wired by the varnish entrypoint
+    purger: noopPurger,
   };
   const _angie: Parameters<typeof createAngiePageCache>[0] = {
     schema,
     site: "http://localhost",
-    // @ts-expect-error — `purge` is wired by the angie entrypoint
-    purge: noopPurger,
+    // @ts-expect-error — `purger` is wired by the angie entrypoint
+    purger: noopPurger,
   };
   const _nginx: Parameters<typeof createNginxPageCache>[0] = {
     schema,
     site: "http://localhost",
-    // @ts-expect-error — `purge` is wired by the nginx entrypoint
-    purge: noopPurger,
+    // @ts-expect-error — `purger` is wired by the nginx entrypoint
+    purger: noopPurger,
   };
   assertEquals(typeof createSouinPageCache, "function");
 });

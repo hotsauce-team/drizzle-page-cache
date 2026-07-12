@@ -3,6 +3,12 @@ import type { Purger } from "./types.ts";
 /** Default path of the middleware's purge-echo route (see `purgeEcho`). */
 export const DEFAULT_PURGE_ECHO_PATH = "/__drizzle-page-cache/purge";
 
+/** Strip trailing slashes from a `site` base URL so appending a path yields
+ * a single slash (used by every dialect entrypoint). */
+export function normalizeSite(site: string): string {
+  return site.replace(/\/+$/, "");
+}
+
 /**
  * LiteSpeed / OpenLiteSpeed: purging is header-driven — the backend response
  * must carry `X-LiteSpeed-Purge` while flowing THROUGH the proxy. This purger

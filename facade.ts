@@ -8,15 +8,18 @@ import {
   rowTag,
   type SchemaInfo,
   type UniqueEq,
-  WILDCARD,
 } from "./derive.ts";
 
 export interface FacadeContext {
   info: SchemaInfo;
+  /** Wire name of the unknown-bucket tag — what opaque reads/writes emit.
+   * Guaranteed distinct from every table name (checked at init), so it
+   * doubles as the "this was opaque" marker in comparisons below. */
+  unknownTag: string;
   addTags(tags: Iterable<string>): void;
   schedulePurge(tags: Iterable<string>): void;
-  /** Observability: wildcard-tag / unobserved-write signals (see types.ts). */
-  emit(kind: "wildcard-tag" | "unobserved-write", reason: string): void;
+  /** Observability: unobserved-read / unobserved-write signals (see types.ts). */
+  emit(kind: "unobserved-read" | "unobserved-write", reason: string): void;
 }
 
 const JOIN_METHODS = new Set([
@@ -60,13 +63,28 @@ export function wrapDb<TDb>(db: TDb, ctx: FacadeContext): TDb {
           return (...args: Any[]) => wrapRead(target[prop](...args), ctx);
         case "insert":
           return (...args: Any[]) =>
-            wrapWrite(target.insert(...args), ctx, tableTagOf(args[0]), false);
+            wrapWrite(
+              target.insert(...args),
+              ctx,
+              tableTagOf(args[0], ctx),
+              false,
+            );
         case "update":
           return (...args: Any[]) =>
-            wrapWrite(target.update(...args), ctx, tableTagOf(args[0]), true);
+            wrapWrite(
+              target.update(...args),
+              ctx,
+              tableTagOf(args[0], ctx),
+              true,
+            );
         case "delete":
           return (...args: Any[]) =>
-            wrapWrite(target.delete(...args), ctx, tableTagOf(args[0]), true);
+            wrapWrite(
+              target.delete(...args),
+              ctx,
+              tableTagOf(args[0], ctx),
+              true,
+            );
         case "query":
           return wrapRelational(target.query, ctx);
         case "transaction":
@@ -90,13 +108,13 @@ export function wrapDb<TDb>(db: TDb, ctx: FacadeContext): TDb {
             const list = Array.isArray(args[0]) ? args[0] : undefined;
             const tags = new Set<string>();
             if (list === undefined) {
-              tags.add(WILDCARD);
+              tags.add(ctx.unknownTag);
             } else {
               for (const stmt of list) {
                 const meta = (stmt as Any)?.[BATCH_META] as
                   | BatchMeta
                   | undefined;
-                if (meta === undefined) tags.add(WILDCARD);
+                if (meta === undefined) tags.add(ctx.unknownTag);
                 else if (meta.write && meta.tags) {
                   for (const t of meta.tags()) tags.add(t);
                 }
@@ -105,11 +123,11 @@ export function wrapDb<TDb>(db: TDb, ctx: FacadeContext): TDb {
             return Promise.resolve(target.batch(...args)).then(
               (result: unknown) => {
                 if (tags.size > 0) {
-                  if (tags.has(WILDCARD)) {
+                  if (tags.has(ctx.unknownTag)) {
                     ctx.emit(
                       "unobserved-write",
                       "db.batch() includes a statement the facade can't " +
-                        "observe — call purgeTags() for its writes",
+                        "observe — call purge()/purgeBatch() for its writes",
                     );
                   }
                   ctx.schedulePurge(tags);
@@ -127,8 +145,8 @@ export function wrapDb<TDb>(db: TDb, ctx: FacadeContext): TDb {
   }) as TDb;
 }
 
-function tableTagOf(table: unknown): string {
-  return is(table, Table) ? getTableName(table) : WILDCARD;
+function tableTagOf(table: unknown, ctx: FacadeContext): string {
+  return is(table, Table) ? getTableName(table) : ctx.unknownTag;
 }
 
 // -- builder-chain wrapping ----------------------------------------------------
@@ -192,10 +210,10 @@ function wrapRead(builder: Any, ctx: FacadeContext): Any {
   return wrapChain(
     builder,
     (result) => {
-      const tags = readTags(result, tables, uniques, ctx.info);
-      if (tags.has(WILDCARD)) {
+      const tags = readTags(result, tables, uniques, ctx);
+      if (tags.has(ctx.unknownTag)) {
         ctx.emit(
-          "wildcard-tag",
+          "unobserved-read",
           tables.size === 0
             ? "select with no observed from()"
             : "non-table from()/join argument",
@@ -205,7 +223,7 @@ function wrapRead(builder: Any, ctx: FacadeContext): Any {
       return result;
     },
     (prop, args) => {
-      if (JOIN_METHODS.has(prop)) tables.add(tableTagOf(args[0]));
+      if (JOIN_METHODS.has(prop)) tables.add(tableTagOf(args[0], ctx));
       if (prop === "where") uniques.push(...findUniqueEqs(args[0]));
     },
     // A read in a batch needs no purge; mark it recognized so it doesn't
@@ -219,7 +237,7 @@ function readTags(
   result: unknown,
   tables: ReadonlySet<string>,
   uniques: readonly UniqueEq[],
-  info: SchemaInfo,
+  ctx: FacadeContext,
 ): Set<string> {
   const tags = new Set<string>();
   const rows = result === undefined || result === null
@@ -232,11 +250,12 @@ function readTags(
   const unique = uniques.find((u) => u.tableName === primary);
 
   if (
-    primary !== undefined && primary !== WILDCARD && unique && rows.length <= 1
+    primary !== undefined && primary !== ctx.unknownTag && unique &&
+    rows.length <= 1
   ) {
     // Entity read: row tag; on a miss also the table tag so a future
     // insert invalidates a cached 404.
-    const pkKey = info.pkKeyByTable.get(primary);
+    const pkKey = ctx.info.pkKeyByTable.get(primary);
     const row = rows[0] as Record<string, unknown> | undefined;
     // The returned row's own PK is authoritative. Only fall back to the WHERE
     // param when there's no row (a miss — the intended row tag is still
@@ -258,7 +277,7 @@ function readTags(
     return tags;
   }
 
-  if (tables.size === 0) tags.add(WILDCARD);
+  if (tables.size === 0) tags.add(ctx.unknownTag);
   for (const t of tables) tags.add(t);
   return tags;
 }
@@ -294,7 +313,7 @@ function wrapWrite(
   return wrapChain(
     builder,
     (result) => {
-      if (tableTag === WILDCARD) {
+      if (tableTag === ctx.unknownTag) {
         ctx.emit("unobserved-write", "write against a non-table target");
       }
       ctx.schedulePurge(writePurgeTags(tableTag, rowPrecise, uniques));
@@ -333,18 +352,18 @@ function wrapRelational(query: Any, ctx: FacadeContext): Any {
               const related = ctx.info.relationsByKey.get(tsKey)?.get(relKey);
               if (related === undefined) {
                 ctx.emit(
-                  "wildcard-tag",
+                  "unobserved-read",
                   `unresolvable relation '${tsKey}.${relKey}'`,
                 );
               }
-              tables.add(related ?? WILDCARD);
+              tables.add(related ?? ctx.unknownTag);
             }
             // Callback-form `where` can't be walked structurally → list read.
             const uniques = config?.where && typeof config.where !== "function"
               ? findUniqueEqs(config.where)
               : [];
             return fn.call(builder, config).then((result: unknown) => {
-              ctx.addTags(readTags(result, tables, uniques, ctx.info));
+              ctx.addTags(readTags(result, tables, uniques, ctx));
               return result;
             });
           };

@@ -12,11 +12,12 @@ helper) and get **automatic, event-driven invalidation**: cache tags are derived
 from the queries each request actually executes, emitted as a `Surrogate-Key`
 response header, and purged when writes touch the same tables or rows.
 
-**Contents**: [Why a page cache?](#why-a-page-cache) · [Install](#install) ·
-[Quickstart](#quickstart) · [What gets cached](#what-gets-cached) ·
-[Tag model](#tag-model) · [Purgers](#purgers) (Caddy · Varnish · LiteSpeed ·
-nginx/Angie) · [Performance](#performance) · [Observability](#observability) ·
-[Namespacing](#namespacing-tagprefix) · [Status](#status)
+**Contents:** [Why a page cache?](#why-a-page-cache) ·
+[Installation](#installation) · [Quickstart](#quickstart) ·
+[What gets cached](#what-gets-cached) · [Tag model](#tag-model) ·
+[Purgers](#purgers) · [Performance](#performance) ·
+[Observability](#observability) · [Namespacing](#namespacing-tagprefix) ·
+[Development](#development) · [License](#license)
 
 ## Why a page cache?
 
@@ -62,17 +63,6 @@ invalidate.
 - **Fails safe**: anything unrecognized over-tags — an unnecessary purge costs
   one re-render, a missed tag would serve stale content, so every fallback errs
   toward purging too much, never too little.
-
-## Install
-
-```sh
-deno add jsr:@hotsauce/drizzle-page-cache   # Deno
-npx jsr add @hotsauce/drizzle-page-cache    # Node / Bun (via JSR)
-```
-
-**Contents:** [Installation](#installation) · [Quickstart](#quickstart) ·
-[Tag model](#tag-model) · [Purgers](#purgers) · [Observability](#observability)
-· [Namespacing](#namespacing-tagprefix) · [Development](#development) · [License](#license)
 
 ## Installation
 
@@ -143,7 +133,7 @@ Every cacheable response (see [What gets cached](#what-gets-cached) — by defau
 `GET` and 2xx) now carries:
 
 ```
-Surrogate-Key: posts:7 users
+Surrogate-Key: posts:7 users dpc-all
 Cache-Control: max-age=0, s-maxage=3600, stale-while-revalidate=30
 ```
 
@@ -188,7 +178,7 @@ Two layers decide whether a response gets tag + cache headers:
   ```ts
   createPageCache({
     schema,
-    site, // (or `purge` with the root API — shouldTag works the same everywhere)
+    site, // (or `purger` with the root API — shouldTag works the same everywhere)
     shouldTag: (req, res) =>
       req.method === "GET" && res.ok &&
       !new URL(req.url).pathname.startsWith("/admin/"),
@@ -213,23 +203,53 @@ Responses that ran no observed queries (no tags) always pass through untouched.
 | single row by PK/unique equality (miss) | `posts:7` + `posts`          | any write to `posts`   |
 | list / filtered / ordered reads         | `posts`                      | any write to `posts`   |
 | joins & relational `with`               | tags for each table involved | writes to either table |
-| anything unrecognized                   | `*`                          | every purge            |
+| anything unrecognized                   | `dpc-unknown`                | every purge            |
+| every tagged page (always)              | `dpc-all`                    | `purgeAll()` only      |
+
+Two reserved tags (rename with `unknownTag` / `allTag` — any name except a
+table name, rejected at init):
+
+- `dpc-unknown` is the **unknown bucket**: every purge batch carries it, so a
+  page the wrapper couldn't read can never outlive a write.
+- `dpc-all` rides **every tagged response** and no automatic purge — one
+  deliberate purge of it flushes everything this cache made cacheable.
 
 Escape hatches for pages the wrapper can't see through (raw SQL, computed
 pages):
 
 ```ts
 pageCache.tag("posts:7"); // add a tag to the current request
-pageCache.purgeTags("posts"); // trigger a purge manually
+pageCache.purgeBatch("posts"); // join the pending purge batch (fire-and-forget)
+await pageCache.purge("posts"); // purge immediately — REJECTS on failure
 ```
 
 `db.batch([...])` is observed too: it derives purges from its statements, so a
 batch of recognized writes purges exactly their tags (reads in a batch need
 none). Only a statement the facade can't read structurally — a raw `sql`
 statement, a relational-query builder, or a builder made on the _unwrapped_ db —
-falls back to the `*` bucket with an `unobserved-write` warning. Root-level raw
+falls back to the unknown bucket with an `unobserved-write` warning. Root-level raw
 execution (`db.execute`/`db.run` with a raw `sql` statement) is likewise opaque;
-pair those with `pageCache.purgeTags(...)`.
+pair those with `pageCache.purgeBatch(...)`.
+
+### Deploys: purge everything
+
+A release changes templates and assets, so cached pages are stale with no DB
+write to say so. Drizzle apps already run JS on deploy — purge right after
+migrating:
+
+```ts
+// deploy.ts — after `drizzle-kit migrate`
+import { pageCache } from "./cache.ts"; // the same instance your app builds
+await pageCache.purgeAll(); // immediate; throws → deploy fails loudly
+```
+
+`createPageCache` needs no DB connection for this — `schema` is a plain
+import, and `purgeAll()` only talks to the proxy. No JS runtime in the
+pipeline? Purge the literal tag (mind your `tagPrefix`) with one request in
+each dialect, e.g. nginx/Angie:
+`curl -X POST http://proxy/__dpc/purge -H 'Surrogate-Key: dpc-all'`. Note the
+scope: `purgeAll()` evicts what **this cache tagged** — pages a proxy cached
+by its own config (no headers from us) only expire by TTL.
 
 ## Purgers
 
@@ -355,12 +375,12 @@ const pageCache = createPageCache({
 One `token` guards both halves of the purge loop (the middleware's echo route
 and the purger that fetches it **via the proxy** — a purge header the proxy
 never sees purges nothing); one `site` keeps their paths in agreement; one `ttl`
-keeps the two cache-control headers coherent; and the `*` wildcard is renamed
-automatically (a literal `*` purge flushes LiteSpeed's **entire** cache — the
-entrypoint refuses it). The dialect-controlled options (`header`,
-`headerSeparator`, `cacheHeaders`, `wildcardTag`, `purge`, `purgeEcho`) are
-rejected at compile time; for a custom setup, use the root `createPageCache`
-with those options explicitly:
+keeps the two cache-control headers coherent; and `unknownTag`/`allTag` must
+never be `*` — a literal `*` purge flushes LiteSpeed's **entire** cache, so
+the entrypoint refuses it (the defaults `dpc-unknown`/`dpc-all` are already
+safe). The dialect-controlled options (`header`, `headerSeparator`,
+`cacheHeaders`, `purger`, `purgeEcho`) are rejected at compile time; for a
+custom setup, use the root `createPageCache` with those options explicitly:
 
 <details>
 <summary>What the entrypoint configures (expanded reference)</summary>
@@ -368,14 +388,13 @@ with those options explicitly:
 ```ts
 createPageCache({
   schema,
-  purge: litespeedPurger(
+  purger: litespeedPurger(
     "https://example.com/__drizzle-page-cache/purge",
     token,
   ),
   header: "X-LiteSpeed-Tag",
   headerSeparator: ",",
   cacheHeaders: { "X-LiteSpeed-Cache-Control": "public, max-age=300" },
-  wildcardTag: "dpc-wild",
   purgeEcho: { token },
 });
 ```
@@ -487,7 +506,7 @@ default logging is disabled):
 
 ```ts
 onEvent: (e) => {
-  // 'wildcard-tag'      a read was opaque → over-purging (safe); deduped by reason
+  // 'unobserved-read'   a read was opaque → over-purging (safe); deduped by reason
   // 'unobserved-write'  a write was opaque → possible staleness (fix these)
   // 'purge-batch'       what was purged, when — debugging gold
   // 'purge-error'       purger threw
@@ -496,21 +515,24 @@ onEvent: (e) => {
 },
 ```
 
-**Debugging staleness locally**: set `debug: true` to expose the computed tags
-as `X-Cache-Tags` on every response (including uncacheable ones), and log
-`purge-batch` — together they answer "why did(n't) this page refresh." Never
+**Debugging staleness locally**: set `debug: true` to expose the tags as
+`X-Cache-Tags` on every response (including uncacheable ones) — on cacheable
+responses it mirrors the wire header exactly, `dpc-all` and all — and log
+`purge-batch`; together they answer "why did(n't) this page refresh." Never
 enable `debug` in production; it leaks schema names.
 
 ## Namespacing (`tagPrefix`)
 
 Running several apps or drizzle instances behind one shared cache/CDN? Without
 namespacing, both apps tagging `posts` would purge each other's pages. A prefix
-is applied to every tag — derived, manual, and the `*` wildcard bucket — and to
+is applied to every tag — derived, manual, and the `dpc-unknown` bucket — and
+to
 every purge, so reads and purges always agree:
 
 ```ts
-createPageCache({ schema, purge, tagPrefix: "shop_" });
-// → Surrogate-Key: shop_posts:7 shop_users   · purges: shop_posts:7 shop_posts
+createPageCache({ schema, purger, tagPrefix: "shop_" });
+// → Surrogate-Key: shop_posts:7 shop_users shop_dpc-all
+// → purges: shop_posts:7 shop_posts shop_dpc-unknown
 ```
 
 Prefer a non-`:` separator (like `shop_`) so tag→table mapping in purgers keeps

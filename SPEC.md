@@ -60,13 +60,24 @@ Deno/Node/Bun (Workers via `nodejs_compat`).
   mutations inside `db.transaction()` buffer and flush only on commit, dropped
   on rollback (purging pre-commit lets the proxy cache pre-commit data).
   Failures are logged; the TTL is the backstop (no retry queue in v0.x).
-- **Escape hatches**: `tag(...tags)` and `purgeTags(...tags)`.
+- **Escape hatches**: `tag(...tags)` and `purgeBatch(...tags)` (join the
+  settled batch, fire-and-forget); `purge(...tags)` / `purgeAll()` send
+  immediately and REJECT on purger failure — deploy hooks get a real exit
+  code where the batch path deliberately swallows (a purge failure must not
+  crash request handling).
+- **Reserved tags** (renameable; collision-checked against table names at
+  init): `dpc-unknown` — stamped on opaque reads, carried by every purge
+  batch, so unknown pages never outlive a write; `dpc-all` — stamped on every
+  tagged response, never purged automatically, one `purgeAll()` flushes
+  everything this cache tagged (release invalidation).
 - **Observability** (`onEvent`, structured `PageCacheEvent`): quiet by default
   except `purge-error` (console.error) and `unobserved-write` (console.warn) —
-  the two staleness-risk signals. `wildcard-tag` is deduplicated by reason
+  the two staleness-risk signals. `unobserved-read` is deduplicated by reason
   (over-purging is safe; the event is developer feedback, not an alarm).
   `header-overflow` collapses row tags to table tags (safe direction) rather
-  than truncating (unsafe). `debug: true` exposes `X-Cache-Tags` on all
+  than truncating (unsafe); if even table tags exceed the byte budget, the
+  header degrades to the reserved tags — the bucket is purged on every
+  write, so still safe. `debug: true` exposes `X-Cache-Tags` on all
   responses for local staleness debugging — never production. Drizzle's own
   `Logger` was considered and rejected as the channel: wrong interface
   (`logQuery(sql, params)` only) and reaching the configured instance requires
@@ -76,11 +87,12 @@ Deno/Node/Bun (Workers via `nodejs_compat`).
   minimal inputs and whose option type `Omit`s the controlled keys (compile-time
   rejection). Rule: coupled invariants → entrypoint
   (`drizzle-page-cache/litespeed`: shared token/path, tag header + separator,
-  ttl-coherent cache-control, wildcard rename); a single `purge:` option → just
+  ttl-coherent cache-control, `*` guard); a single `purger:` option → just
   a purger export (Souin/Varnish/Angie). The root `createPageCache` remains the
   escape hatch and the documented expanded form.
 - **Namespacing** (`tagPrefix`, static string): applied verbatim to every tag
-  (derived, manual, wildcard) and every purge at the two choke points, so reads
+  (derived, manual, unknown bucket) and every purge at the two choke points, so
+  reads
   and purges always agree. Solves cross-app collisions behind a shared
   cache/CDN. Shared-table multi-tenancy needs no prefix (row tags globally
   unique; cross-tenant table purges only over-purge). Dynamic per-request
@@ -118,7 +130,7 @@ render → HIT → write → purge → MISS with fresh body —
 three verified passing 5 Jul 2026. Fourth pairing: **OpenLiteSpeed** (GPLv3,
 `e2e/ols/` config: backend-driven caching via `enableCache 0` +
 `checkPublicCache 1`) with the same Deno app in litespeed mode
-(`X-LiteSpeed-Tag`, comma separator, `X-LiteSpeed-Cache-Control`, `wildcardTag`
+(`X-LiteSpeed-Tag`, comma separator, `X-LiteSpeed-Cache-Control`, `unknownTag`
 rename, purge-echo route + `litespeedPurger`) — `./verify.sh ols` passing 5 Jul
 2026, including tag-purge of query-string variants and colon-containing tags.
 

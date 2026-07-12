@@ -14,9 +14,6 @@ import {
   Table,
 } from "drizzle-orm";
 
-/** The tag for "this query was opaque to us" — matched by every purge. */
-export const WILDCARD = "*";
-
 export interface SchemaInfo {
   /** TS schema key → SQL table name, for RQB property-path lookup. */
   tableByKey: Map<string, string>;
@@ -62,7 +59,7 @@ export function analyzeSchema(schema: Record<string, unknown>): SchemaInfo {
     }
   } catch {
     // No relations in schema (or drizzle internals moved) — `with:` queries
-    // will degrade to the wildcard tag rather than silently under-tag.
+    // will degrade to the unknown-bucket tag rather than silently under-tag.
   }
 
   return { tableByKey, pkKeyByTable, relationsByKey };
