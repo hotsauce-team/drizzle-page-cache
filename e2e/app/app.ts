@@ -7,11 +7,11 @@ import process from "node:process";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { createPageCache as createSouinPageCache } from "../../souin/mod.ts";
-import { createPageCache as createAngiePageCache } from "../../angie/mod.ts";
-import { createPageCache as createNginxPageCache } from "../../nginx/mod.ts";
-import { createPageCache as createLiteSpeedPageCache } from "../../litespeed/mod.ts";
-import type { Handler } from "../../types.ts";
+import { createPageCache as createSouinPageCache } from "../../src/dialects/souin.ts";
+import { createPageCache as createAngiePageCache } from "../../src/dialects/angie.ts";
+import { createPageCache as createNginxPageCache } from "../../src/dialects/nginx.ts";
+import { createPageCache as createLiteSpeedPageCache } from "../../src/dialects/litespeed.ts";
+import type { Handler } from "../../src/types.ts";
 
 export const posts = sqliteTable("posts", {
   id: integer("id").primaryKey({ autoIncrement: true }),

@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { eq, sql } from "drizzle-orm";
-import { createPageCache } from "../litespeed/mod.ts";
+import { createPageCache } from "../src/dialects/litespeed.ts";
 import { createTestContext, posts, schema } from "./helpers.ts";
 
 function withStubbedFetch() {

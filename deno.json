@@ -2,20 +2,20 @@
   "name": "@hotsauce/drizzle-page-cache",
   "version": "0.1.0",
   "exports": {
-    ".": "./mod.ts",
-    "./litespeed": "./litespeed/mod.ts",
-    "./souin": "./souin/mod.ts",
-    "./surrogate-key": "./surrogate-key/mod.ts",
-    "./xkey": "./xkey/mod.ts",
-    "./varnish": "./varnish/mod.ts",
-    "./angie": "./angie/mod.ts",
-    "./nginx": "./nginx/mod.ts"
+    ".": "./src/mod.ts",
+    "./litespeed": "./src/dialects/litespeed.ts",
+    "./souin": "./src/dialects/souin.ts",
+    "./surrogate-key": "./src/dialects/surrogate-key.ts",
+    "./xkey": "./src/dialects/xkey.ts",
+    "./varnish": "./src/dialects/varnish.ts",
+    "./angie": "./src/dialects/angie.ts",
+    "./nginx": "./src/dialects/nginx.ts"
   },
   "license": "MIT",
 
   "tasks": {
     "test": "deno test --allow-env --allow-read tests/",
-    "check": "deno check mod.ts litespeed/mod.ts souin/mod.ts surrogate-key/mod.ts xkey/mod.ts varnish/mod.ts angie/mod.ts nginx/mod.ts tests/",
+    "check": "deno check src/ tests/",
     "build:npm": "deno run -A scripts/build_npm.ts"
   },
 
@@ -27,14 +27,7 @@
 
   "publish": {
     "include": [
-      "mod.ts",
-      "*.ts",
-      "litespeed/",
-      "souin/",
-      "surrogate-key/",
-      "xkey/",
-      "varnish/",
-      "angie/",
+      "src/",
       "nginx/",
       "README.md",
       "LICENSE"

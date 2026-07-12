@@ -1,8 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { eq, or } from "drizzle-orm";
-import { type FacadeContext, wrapDb } from "../facade.ts";
-import { analyzeSchema } from "../derive.ts";
-import { createPageCache } from "../page_cache.ts";
+import { type FacadeContext, wrapDb } from "../src/facade.ts";
+import { analyzeSchema } from "../src/derive.ts";
+import { createPageCache } from "../src/page_cache.ts";
 import {
   createTestContext,
   posts,

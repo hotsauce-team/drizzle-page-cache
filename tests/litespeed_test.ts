@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { eq, sql } from "drizzle-orm";
-import { createPageCache } from "../page_cache.ts";
-import { litespeedPurger } from "../purgers.ts";
+import { createPageCache } from "../src/page_cache.ts";
+import { litespeedPurger } from "../src/purgers.ts";
 import {
   createTestContext,
   posts,

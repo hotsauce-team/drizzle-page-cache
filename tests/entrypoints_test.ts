@@ -7,12 +7,12 @@
 
 import { assertEquals } from "@std/assert";
 import { eq } from "drizzle-orm";
-import { createPageCache as createSouinPageCache } from "../souin/mod.ts";
-import { createPageCache as createVarnishPageCache } from "../varnish/mod.ts";
-import { createPageCache as createAngiePageCache } from "../angie/mod.ts";
-import { createPageCache as createNginxPageCache } from "../nginx/mod.ts";
+import { createPageCache as createSouinPageCache } from "../src/dialects/souin.ts";
+import { createPageCache as createVarnishPageCache } from "../src/dialects/varnish.ts";
+import { createPageCache as createAngiePageCache } from "../src/dialects/angie.ts";
+import { createPageCache as createNginxPageCache } from "../src/dialects/nginx.ts";
 import { createTestContext, posts, schema } from "./helpers.ts";
-import type { PageCache } from "../types.ts";
+import type { PageCache } from "../src/types.ts";
 
 function withStubbedFetch() {
   const calls: { url: string; method?: string; headers?: HeadersInit }[] = [];
