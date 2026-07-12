@@ -74,9 +74,14 @@ export interface PageCacheOptions {
     /** Header value builder. Default: tags → `tag=a, tag=b`. */
     value?: (tags: readonly string[]) => string;
   };
-  /** Path prefixes never tagged/cached. Default ['/admin']. */
-  exclude?: string[];
-  /** Full override of the cacheability predicate. */
+  /** Cacheability *policy* predicate. Default: `GET` && 2xx. Narrow it to
+   * exclude paths (`(req, res) => req.method === "GET" && res.ok &&
+   * !new URL(req.url).pathname.startsWith("/admin/")`) or widen it to cache
+   * non-2xx (e.g. 404s — entity-miss tags already invalidate them on row
+   * creation). A safety gate always applies on top and cannot be widened:
+   * responses with `Set-Cookie` or `private`/`no-store`/`no-cache` in
+   * `Cache-Control` are never tagged/cached, so personalized responses are
+   * never promoted to a shared cache. */
   shouldTag?: (req: Request, res: Response) => boolean;
   /** Debounce window for purge batching, ms. Default 50. */
   settleMs?: number;
@@ -100,9 +105,9 @@ export interface PageCacheOptions {
    * purged on every write — over-purged, never stale). Default 7900. */
   maxHeaderBytes?: number;
   /** Dev only: also expose tags as `X-Cache-Tags` on every response that has
-   * them (including excluded paths). On cacheable responses it mirrors the
-   * wire header exactly (`allTag`, overflow collapse and all); elsewhere,
-   * the derived tags. Leaks schema names — never in prod. */
+   * them (including uncacheable ones). On cacheable responses it mirrors
+   * the wire header exactly (`allTag`, overflow collapse and all);
+   * elsewhere, the derived tags. Leaks schema names — never in prod. */
   debug?: boolean;
 }
 

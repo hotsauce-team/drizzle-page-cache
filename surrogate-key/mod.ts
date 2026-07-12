@@ -3,7 +3,7 @@
  * drizzle-adapter style:
  *
  * ```ts
- * import { createPageCache } from "drizzle-page-cache/surrogate-key";
+ * import { createPageCache } from "@hotsauce/drizzle-page-cache/surrogate-key";
  *
  * const pageCache = createPageCache({
  *   schema,
@@ -14,7 +14,7 @@
  *
  * This is the dialect nginx, Angie, Fastly, and any CDN that accepts a
  * `Surrogate-Key` batch purge all speak — imported by product name via
- * `drizzle-page-cache/nginx` and `drizzle-page-cache/angie`, which are thin
+ * `@hotsauce/drizzle-page-cache/nginx` and `@hotsauce/drizzle-page-cache/angie`, which are thin
  * re-exports of this module.
  *
  * The wire contract:
@@ -53,6 +53,11 @@
  *   means exactly "a purge evicted this";
  * - `proxy_cache_key` MUST be declared as `$uri$is_args$args` — `purge.lua`
  *   mirrors that exact key string.
+ * - purge marks self-size: every purge from this entrypoint carries
+ *   `X-DPC-Mark-TTL: ttl + staleWhileRevalidate`, so a mark lives exactly
+ *   as long as the oldest page it may need to invalidate — nothing to keep
+ *   in sync in the nginx/Angie config. Headerless purges (curl/ops) are
+ *   remembered for 30 days, the Lua's cap.
  *
  * For a custom purger, drop down to the root `createPageCache`.
  */
@@ -81,6 +86,10 @@ export function createPageCache(
     purger: nginxPurger(normalizeSite(site), {
       path: purgePath,
       token: purgeToken,
+      // A mark must outlive every page it may need to invalidate; state
+      // the page lifetime so the Lua sizes marks exactly (defaults mirror
+      // page_cache.ts).
+      markTtl: (rest.ttl ?? 3600) + (rest.staleWhileRevalidate ?? 30),
     }),
   });
 }

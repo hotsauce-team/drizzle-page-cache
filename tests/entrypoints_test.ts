@@ -88,6 +88,8 @@ Deno.test("nginx entrypoint: one POST to the purge endpoint with tags in Surroga
   );
   // No token option -> no token header.
   assertEquals(headers.get("X-Purge-Token"), null);
+  // Marks self-size: default ttl 3600 + swr 30.
+  assertEquals(headers.get("X-DPC-Mark-TTL"), "3630");
 });
 
 Deno.test("angie entrypoint: alias of nginx; purgePath/purgeToken wire through", async () => {
@@ -96,6 +98,8 @@ Deno.test("angie entrypoint: alias of nginx; purgePath/purgeToken wire through",
     site: "http://localhost",
     purgePath: "/_cache/purge",
     purgeToken: "s3cr3t",
+    ttl: 300,
+    staleWhileRevalidate: 15,
     settleMs: 1,
   });
   const calls = await writeAndFlush(pageCache);
@@ -108,6 +112,8 @@ Deno.test("angie entrypoint: alias of nginx; purgePath/purgeToken wire through",
     ["dpc-unknown", "posts", "posts:3"],
   );
   assertEquals(headers.get("X-Purge-Token"), "s3cr3t");
+  // Marks self-size from the configured page lifetime: 300 + 15.
+  assertEquals(headers.get("X-DPC-Mark-TTL"), "315");
 });
 
 Deno.test("entrypoints: `purge` is controlled and rejected at compile time", () => {

@@ -142,6 +142,13 @@ if [ -n "$PURGE_API" ]; then
     -H "Surrogate-Key: no-such-tag" "$HOST/__dpc/purge")
   echo "   POST /purge unknown tag -> $c7b"
   [ "$c7b" = "200" ] || fail "7 (unknown tag)" "/__dpc/purge"
+  b7=$(curl_ -X POST -H "Surrogate-Key: no-such-tag" "$HOST/__dpc/purge")
+  echo "   headerless purge echoes the mark-TTL cap: $b7"
+  echo "$b7" | grep -q '"markTtl":2592000' || fail "7 (markTtl cap)" "/__dpc/purge"
+  b7x=$(curl_ -X POST -H "Surrogate-Key: no-such-tag" \
+    -H "X-DPC-Mark-TTL: 120" "$HOST/__dpc/purge")
+  echo "   X-DPC-Mark-TTL sizes the mark: $b7x"
+  echo "$b7x" | grep -q '"markTtl":120' || fail "7 (markTtl header)" "/__dpc/purge"
   s7=$(status "$P"); echo "   $s7"
   echo "$s7" | grep -qi 'hit' || fail "7 (still hit)" "$P"
   c7c=$(curl_ -o /dev/null -w '%{http_code}' "$HOST/__dpc/purge")

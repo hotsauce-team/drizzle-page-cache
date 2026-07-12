@@ -176,7 +176,7 @@ Deno.test("debug: X-Cache-Tags mirrors the wire tags on cacheable responses", as
   assertEquals(res.headers.get("X-Cache-Tags"), "posts:3 dpc-all");
 });
 
-Deno.test("debug: true exposes X-Cache-Tags even on excluded paths", async () => {
+Deno.test("debug: true exposes X-Cache-Tags even on safety-gated responses", async () => {
   const base = createTestContext();
   const pageCache = createPageCache({
     schema,
@@ -186,11 +186,34 @@ Deno.test("debug: true exposes X-Cache-Tags even on excluded paths", async () =>
   const db = pageCache.wrap(base.raw);
   const handler = pageCache.middleware(async () => {
     await db.select().from(posts).where(eq(posts.id, 4));
-    return new Response("admin page");
+    return new Response("account page", {
+      headers: { "Set-Cookie": "sid=abc" },
+    });
   });
-  const res = await handler(new Request("http://localhost/admin/posts/4"));
+  const res = await handler(new Request("http://localhost/account/posts/4"));
   assertEquals(res.headers.get("X-Cache-Tags"), "posts:4");
   assertEquals(res.headers.get("Surrogate-Key"), null); // still not cacheable
+});
+
+Deno.test("header-overflow: uncacheable when even the reserved tags cannot fit", async () => {
+  const events: PageCacheEvent[] = [];
+  const base = createTestContext();
+  const pageCache = createPageCache({
+    schema,
+    purger: new RecordingPurger(),
+    maxHeaderBytes: 5, // smaller than "dpc-unknown dpc-all"
+    onEvent: (e) => events.push(e),
+  });
+  const _db = pageCache.wrap(base.raw);
+  const handler = pageCache.middleware(() => {
+    pageCache.tag("posts:1");
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  // A page cached without its tags could never be purged — serve uncached.
+  assertEquals(res.headers.get("Surrogate-Key"), null);
+  assertEquals(res.headers.get("Cache-Control"), null);
+  assertEquals(events.filter((e) => e.kind === "header-overflow").length, 1);
 });
 
 // -- tagPrefix -----------------------------------------------------------------

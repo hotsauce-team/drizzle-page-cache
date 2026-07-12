@@ -2,7 +2,7 @@
  * LiteSpeed / OpenLiteSpeed entrypoint — drizzle-adapter style:
  *
  * ```ts
- * import { createPageCache } from "drizzle-page-cache/litespeed";
+ * import { createPageCache } from "@hotsauce/drizzle-page-cache/litespeed";
  *
  * const pageCache = createPageCache({
  *   schema,
