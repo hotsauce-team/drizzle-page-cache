@@ -4,8 +4,8 @@ import {
   assertThrows,
 } from "@std/assert";
 import { eq, sql } from "drizzle-orm";
-import { createPageCache } from "../page_cache.ts";
-import type { PageCacheEvent } from "../types.ts";
+import { createPageCache } from "../src/page_cache.ts";
+import type { PageCacheEvent } from "../src/types.ts";
 import {
   createTestContext,
   posts,

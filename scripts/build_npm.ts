@@ -9,14 +9,14 @@ await emptyDir("./npm");
 
 await build({
   entryPoints: [
-    "./mod.ts",
-    { name: "./litespeed", path: "./litespeed/mod.ts" },
-    { name: "./souin", path: "./souin/mod.ts" },
-    { name: "./surrogate-key", path: "./surrogate-key/mod.ts" },
-    { name: "./xkey", path: "./xkey/mod.ts" },
-    { name: "./varnish", path: "./varnish/mod.ts" },
-    { name: "./angie", path: "./angie/mod.ts" },
-    { name: "./nginx", path: "./nginx/mod.ts" },
+    "./src/mod.ts",
+    { name: "./litespeed", path: "./src/dialects/litespeed.ts" },
+    { name: "./souin", path: "./src/dialects/souin.ts" },
+    { name: "./surrogate-key", path: "./src/dialects/surrogate-key.ts" },
+    { name: "./xkey", path: "./src/dialects/xkey.ts" },
+    { name: "./varnish", path: "./src/dialects/varnish.ts" },
+    { name: "./angie", path: "./src/dialects/angie.ts" },
+    { name: "./nginx", path: "./src/dialects/nginx.ts" },
   ],
   outDir: "./npm",
   shims: { deno: false },

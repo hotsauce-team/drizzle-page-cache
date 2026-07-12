@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { eq } from "drizzle-orm";
-import { createPageCache } from "../page_cache.ts";
+import { createPageCache } from "../src/page_cache.ts";
 import {
   createTestContext,
   posts,

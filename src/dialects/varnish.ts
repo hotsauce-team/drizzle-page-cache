@@ -3,7 +3,7 @@
  * Varnish users will look for. Wires `varnishPurger`: one PURGE request to
  * `site` carrying the tags in an `xkey` header. Requires the xkey vmod and a
  * VCL snippet handling PURGE (`xkey.purge(req.http.xkey)`) — see the full
- * dialect docs on `../xkey/mod.ts`.
+ * dialect docs on `./xkey.ts`.
  *
  * ```ts
  * import { createPageCache } from "@hotsauce/drizzle-page-cache/varnish";
@@ -16,6 +16,6 @@
  * ```
  */
 
-export { createPageCache } from "../xkey/mod.ts";
-export type { XkeyPageCacheOptions as VarnishPageCacheOptions } from "../xkey/mod.ts";
+export { createPageCache } from "./xkey.ts";
+export type { XkeyPageCacheOptions as VarnishPageCacheOptions } from "./xkey.ts";
 export type { PageCache } from "../types.ts";

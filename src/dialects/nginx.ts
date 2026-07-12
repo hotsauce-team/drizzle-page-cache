@@ -6,7 +6,7 @@
  * endpoint. Requires lua-nginx-module (Alpine `nginx-mod-http-lua`,
  * Debian/Ubuntu `libnginx-mod-http-lua`, or OpenResty) — see the verified
  * config in `e2e/nginx/nginx.conf` and the full dialect docs on
- * `../surrogate-key/mod.ts`.
+ * `./surrogate-key.ts`.
  *
  * Purge marks self-size: every purge carries
  * `X-DPC-Mark-TTL: ttl + staleWhileRevalidate`, so there is no mark
@@ -23,6 +23,6 @@
  * ```
  */
 
-export { createPageCache } from "../surrogate-key/mod.ts";
-export type { SurrogateKeyPageCacheOptions as NginxPageCacheOptions } from "../surrogate-key/mod.ts";
+export { createPageCache } from "./surrogate-key.ts";
+export type { SurrogateKeyPageCacheOptions as NginxPageCacheOptions } from "./surrogate-key.ts";
 export type { PageCache } from "../types.ts";

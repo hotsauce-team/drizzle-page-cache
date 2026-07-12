@@ -4,7 +4,7 @@
  * tag transport through its official `angie-module-lua` package (bundled in
  * the full Docker image; load `ndk_http_module.so` first) — see the
  * verified config in `e2e/nginx/angie.conf` and the full dialect docs on
- * `../surrogate-key/mod.ts`.
+ * `./surrogate-key.ts`.
  *
  * Purge marks self-size: every purge carries
  * `X-DPC-Mark-TTL: ttl + staleWhileRevalidate`, so there is no mark
@@ -21,6 +21,6 @@
  * ```
  */
 
-export { createPageCache } from "../surrogate-key/mod.ts";
-export type { SurrogateKeyPageCacheOptions as AngiePageCacheOptions } from "../surrogate-key/mod.ts";
+export { createPageCache } from "./surrogate-key.ts";
+export type { SurrogateKeyPageCacheOptions as AngiePageCacheOptions } from "./surrogate-key.ts";
 export type { PageCache } from "../types.ts";
