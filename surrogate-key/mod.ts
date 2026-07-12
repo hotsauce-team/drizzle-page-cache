@@ -58,11 +58,11 @@
  */
 
 import { createPageCache as createCorePageCache } from "../page_cache.ts";
-import { nginxPurger } from "../purgers.ts";
+import { nginxPurger, normalizeSite } from "../purgers.ts";
 import type { PageCache, PageCacheOptions } from "../types.ts";
 
 export interface SurrogateKeyPageCacheOptions
-  extends Omit<PageCacheOptions, "purge"> {
+  extends Omit<PageCacheOptions, "purger"> {
   /** The proxy's base URL purges are sent to, e.g. `http://localhost`. */
   site: string;
   /** Route of the purge endpoint location. Default `/__dpc/purge`. */
@@ -78,7 +78,7 @@ export function createPageCache(
   const { site, purgePath, purgeToken, ...rest } = options;
   return createCorePageCache({
     ...rest,
-    purge: nginxPurger(site.replace(/\/+$/, ""), {
+    purger: nginxPurger(normalizeSite(site), {
       path: purgePath,
       token: purgeToken,
     }),

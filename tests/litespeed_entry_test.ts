@@ -27,7 +27,7 @@ Deno.test("litespeed entrypoint: one ttl drives s-maxage AND X-LiteSpeed-Cache-C
     return new Response("ok");
   });
   const res = await handler(new Request("http://localhost/p"));
-  assertEquals(res.headers.get("X-LiteSpeed-Tag"), "posts:3");
+  assertEquals(res.headers.get("X-LiteSpeed-Tag"), "posts:3,dpc-all");
   assertEquals(
     res.headers.get("X-LiteSpeed-Cache-Control"),
     "public, max-age=120",
@@ -71,7 +71,7 @@ Deno.test("litespeed entrypoint: site+token wire the purger and the echo route t
   assertEquals(url.searchParams.get("token"), "secret");
 });
 
-Deno.test("litespeed entrypoint: wildcard is renamed by default and '*' is rejected", async () => {
+Deno.test("litespeed entrypoint: unknown bucket defaults to dpc-unknown and '*' is rejected", async () => {
   const base = createTestContext();
   const pageCache = createPageCache({
     schema,
@@ -84,7 +84,7 @@ Deno.test("litespeed entrypoint: wildcard is renamed by default and '*' is rejec
     return new Response("ok");
   });
   const res = await handler(new Request("http://localhost/p"));
-  assertEquals(res.headers.get("X-LiteSpeed-Tag"), "dpc-wild");
+  assertEquals(res.headers.get("X-LiteSpeed-Tag"), "dpc-unknown,dpc-all");
 
   assertThrows(
     () =>
@@ -92,7 +92,7 @@ Deno.test("litespeed entrypoint: wildcard is renamed by default and '*' is rejec
         schema,
         site: "https://example.com",
         token: "secret",
-        wildcardTag: "*",
+        unknownTag: "*",
       }),
     Error,
     "must not be '*'",
@@ -111,8 +111,8 @@ Deno.test("litespeed entrypoint: dialect-controlled keys are rejected at compile
     schema,
     site: "https://example.com",
     token: "secret",
-    // @ts-expect-error — `purge` is controlled by the litespeed dialect
-    purge: { purge: () => Promise.resolve() },
+    // @ts-expect-error — `purger` is controlled by the litespeed dialect
+    purger: { purge: () => Promise.resolve() },
   };
   assertEquals(typeof createPageCache, "function");
 });

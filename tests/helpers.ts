@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { relations } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { createPageCache } from "../page_cache.ts";
+import { createPageCache, DEFAULT_ALL_TAG } from "../page_cache.ts";
 import type { Purger } from "../types.ts";
 
 export const users = sqliteTable("users", {
@@ -94,7 +94,7 @@ export function createTestContext(options: { settleMs?: number } = {}) {
   const purger = new RecordingPurger();
   const pageCache = createPageCache({
     schema,
-    purge: purger,
+    purger,
     settleMs: options.settleMs ?? 1,
   });
   const db = pageCache.wrap(raw);
@@ -102,7 +102,9 @@ export function createTestContext(options: { settleMs?: number } = {}) {
   return { db, raw, pageCache, purger, sqlite };
 }
 
-/** Run a read inside a request scope and return the tags it produced. */
+/** Run a read inside a request scope and return the tags it produced.
+ * Filters the ever-present all-pages tag — these tests are about
+ * derivation; the stamp itself is covered in middleware_test.ts. */
 export async function tagsFor(
   pageCache: ReturnType<typeof createTestContext>["pageCache"],
   fn: () => Promise<unknown>,
@@ -114,5 +116,7 @@ export async function tagsFor(
   });
   const res = await handler(new Request("http://localhost/page"));
   captured = res.headers.get("Surrogate-Key") ?? "";
-  return captured === "" ? [] : captured.split(" ").sort();
+  return captured === ""
+    ? []
+    : captured.split(" ").filter((t) => t !== DEFAULT_ALL_TAG).sort();
 }

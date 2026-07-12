@@ -21,10 +21,11 @@
  */
 
 import { createPageCache as createCorePageCache } from "../page_cache.ts";
-import { varnishPurger } from "../purgers.ts";
+import { normalizeSite, varnishPurger } from "../purgers.ts";
 import type { PageCache, PageCacheOptions } from "../types.ts";
 
-export interface XkeyPageCacheOptions extends Omit<PageCacheOptions, "purge"> {
+export interface XkeyPageCacheOptions
+  extends Omit<PageCacheOptions, "purger"> {
   /** The proxy's base URL the PURGE is sent to, e.g. `http://localhost`. */
   site: string;
 }
@@ -33,7 +34,7 @@ export function createPageCache(options: XkeyPageCacheOptions): PageCache {
   const { site, ...rest } = options;
   return createCorePageCache({
     ...rest,
-    purge: varnishPurger(site.replace(/\/+$/, "")),
+    purger: varnishPurger(normalizeSite(site)),
   });
 }
 

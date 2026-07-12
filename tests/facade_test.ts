@@ -109,15 +109,15 @@ Deno.test("update by PK purges row + table tags after settle", async () => {
   await db.update(posts).set({ title: "edited" }).where(eq(posts.id, 7));
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts", "posts:7"]);
+  assertEquals(purger.all, ["dpc-unknown", "posts", "posts:7"]);
 });
 
-Deno.test("insert purges the table tag only", async () => {
+Deno.test("insert purges the table tag (plus the unknown bucket)", async () => {
   const { db, pageCache, purger } = createTestContext();
   await db.insert(posts).values({ title: "new", body: "b", authorId: 1 });
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts"]);
+  assertEquals(purger.all, ["dpc-unknown", "posts"]);
 });
 
 Deno.test("delete by PK purges row + table tags", async () => {
@@ -125,7 +125,7 @@ Deno.test("delete by PK purges row + table tags", async () => {
   await db.delete(posts).where(eq(posts.id, 9));
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["posts", "posts:9"]);
+  assertEquals(purger.all, ["dpc-unknown", "posts", "posts:9"]);
 });
 
 Deno.test("update by non-PK column purges table tag (no false row precision)", async () => {
@@ -135,7 +135,7 @@ Deno.test("update by non-PK column purges table tag (no false row precision)", a
   );
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["users"]);
+  assertEquals(purger.all, ["dpc-unknown", "users"]);
 });
 
 Deno.test("purge batches are deduplicated across writes in the settle window", async () => {
@@ -146,5 +146,5 @@ Deno.test("purge batches are deduplicated across writes in the settle window", a
   await new Promise((r) => setTimeout(r, 30));
   await pageCache.flush();
   assertEquals(purger.batches.length, 1);
-  assertEquals(purger.batches[0], ["posts", "posts:1", "posts:2"]);
+  assertEquals(purger.batches[0], ["dpc-unknown", "posts", "posts:1", "posts:2"]);
 });

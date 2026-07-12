@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DEFAULT_PURGE_ECHO_PATH } from "./purgers.ts";
-import { analyzeSchema, WILDCARD } from "./derive.ts";
+import { analyzeSchema } from "./derive.ts";
 import { type FacadeContext, wrapDb } from "./facade.ts";
 import type {
   Handler,
@@ -8,6 +8,12 @@ import type {
   PageCacheEvent,
   PageCacheOptions,
 } from "./types.ts";
+
+/** Default wire name of the unknown-bucket tag. */
+export const DEFAULT_UNKNOWN_TAG = "dpc-unknown";
+
+/** Default wire name of the all-pages tag (`purgeAll()` purges it). */
+export const DEFAULT_ALL_TAG = "dpc-all";
 
 export function createPageCache(options: PageCacheOptions): PageCache {
   const header = options.header ?? "Surrogate-Key";
@@ -17,7 +23,8 @@ export function createPageCache(options: PageCacheOptions): PageCache {
   const settleMs = options.settleMs ?? 50;
   const exclude = options.exclude ?? ["/admin"];
   const prefix = options.tagPrefix ?? "";
-  const wildcardTag = options.wildcardTag ?? WILDCARD;
+  const unknownTag = options.unknownTag ?? DEFAULT_UNKNOWN_TAG;
+  const allTag = options.allTag ?? DEFAULT_ALL_TAG;
   const maxHeaderBytes = options.maxHeaderBytes ?? 7900;
   const echo = options.purgeEcho === undefined ? undefined : {
     token: options.purgeEcho.token,
@@ -36,11 +43,11 @@ export function createPageCache(options: PageCacheOptions): PageCache {
     });
 
   // -- events: silent by default except the two that can mean stale pages ----
-  const seenWildcardReasons = new Set<string>();
+  const seenUnobservedReadReasons = new Set<string>();
   const emit = (event: PageCacheEvent): void => {
-    if (event.kind === "wildcard-tag") {
-      if (seenWildcardReasons.has(event.reason)) return;
-      seenWildcardReasons.add(event.reason);
+    if (event.kind === "unobserved-read") {
+      if (seenUnobservedReadReasons.has(event.reason)) return;
+      seenUnobservedReadReasons.add(event.reason);
     }
     if (options.onEvent) {
       options.onEvent(event);
@@ -57,30 +64,71 @@ export function createPageCache(options: PageCacheOptions): PageCache {
   };
 
   const info = analyzeSchema(options.schema);
+  // Reserved tags colliding with a table name would be catastrophic: the
+  // bucket rides every purge batch (evicting that table's list pages on every
+  // write), and a table named like `allTag` would flush the whole site on
+  // every write to it.
+  const tableNames = new Set(info.tableByKey.values());
+  if (tableNames.has(unknownTag)) {
+    throw new Error(
+      `drizzle-page-cache: unknownTag '${unknownTag}' collides with the table '${unknownTag}' — pick a name that is not a table tag`,
+    );
+  }
+  if (tableNames.has(allTag)) {
+    throw new Error(
+      `drizzle-page-cache: allTag '${allTag}' collides with the table '${allTag}' — pick a name that is not a table tag`,
+    );
+  }
+  if (allTag === unknownTag) {
+    throw new Error(
+      `drizzle-page-cache: allTag and unknownTag are both '${allTag}' — they must differ (the bucket rides every purge batch, so every write would flush the site)`,
+    );
+  }
   const scope = new AsyncLocalStorage<Set<string>>();
-  const withPrefix = (tag: string): string =>
-    prefix + (tag === WILDCARD ? wildcardTag : tag);
+  const withPrefix = (tag: string): string => prefix + tag;
+  const unknownWire = withPrefix(unknownTag);
+  const allWire = withPrefix(allTag);
+  const encoder = new TextEncoder();
+  // `maxHeaderBytes` is a BYTE budget; `.length` (UTF-16 code units) never
+  // exceeds the UTF-8 byte count, so the cheap check short-circuits the
+  // encode for the common all-ASCII case only when already over.
+  const overBudget = (value: string): boolean =>
+    value.length > maxHeaderBytes ||
+    encoder.encode(value).length > maxHeaderBytes;
 
   // -- purge queue: dedupe + settle; flush() for tests/shutdown ---------------
   let pending = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight: Promise<void> = Promise.resolve();
+  // The rethrowing view of the most recent send — what a bare `purge()`
+  // reports when there is nothing left to drain. Always also caught via
+  // `inFlight`, so dropping it never surfaces an unhandled rejection.
+  let lastSend: Promise<void> = Promise.resolve();
 
-  function flushNow(): Promise<void> {
+  /** Drain the pending batch. `rethrow` selects the error contract: the
+   * returned promise rejects on purger failure (`purge()`/`purgeAll()`) or
+   * swallows it after the purge-error event (`flush()`, settle timer). The
+   * internal chain always stays caught either way. */
+  function drain(rethrow: boolean): Promise<void> {
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
     }
-    if (pending.size === 0) return inFlight;
+    if (pending.size === 0) return rethrow ? lastSend : inFlight;
+    // Unknown-bucket pages are opaque — any write might affect them — so
+    // every batch carries the bucket tag (the tag model's "every purge").
+    pending.add(unknownWire);
     const batch = [...pending];
     pending = new Set();
-    inFlight = inFlight
-      .then(() => {
-        emit({ kind: "purge-batch", tags: batch });
-        return options.purge.purge(batch);
-      })
-      .catch((error) => emit({ kind: "purge-error", tags: batch, error }));
-    return inFlight;
+    const send = inFlight.then(() => {
+      emit({ kind: "purge-batch", tags: batch });
+      return options.purger.purge(batch);
+    });
+    lastSend = send;
+    inFlight = send.catch((error) =>
+      emit({ kind: "purge-error", tags: batch, error })
+    );
+    return rethrow ? send : inFlight;
   }
 
   function schedulePurge(tags: Iterable<string>): void {
@@ -92,7 +140,7 @@ export function createPageCache(options: PageCacheOptions): PageCache {
     if (added && timer === undefined) {
       timer = setTimeout(() => {
         timer = undefined;
-        flushNow();
+        drain(false);
       }, settleMs);
       // Don't hold the event loop open for a pending purge (server shutdown).
       (timer as { unref?: () => void }).unref?.();
@@ -101,6 +149,7 @@ export function createPageCache(options: PageCacheOptions): PageCache {
 
   const ctx: FacadeContext = {
     info,
+    unknownTag,
     addTags: (tags) => {
       const store = scope.getStore();
       if (store) {
@@ -151,21 +200,27 @@ export function createPageCache(options: PageCacheOptions): PageCache {
         if (!cacheable && !options.debug) return res;
 
         const out = new Response(res.body, res);
-        if (options.debug) {
-          out.headers.set("X-Cache-Tags", [...tags].join(" "));
-        }
         if (cacheable) {
-          let value = [...tags].join(separator);
-          if (value.length > maxHeaderBytes) {
-            const collapsed = collapse(tags);
+          // The all-pages tag rides every tagged response (never any
+          // automatic purge) so purgeAll() can flush the whole site.
+          const wire = new Set(tags);
+          wire.add(allWire);
+          let wireTags = [...wire];
+          if (overBudget(wireTags.join(separator))) {
             emit({
               kind: "header-overflow",
-              count: tags.size,
+              count: wire.size,
               path: new URL(req.url).pathname,
             });
-            value = collapsed.join(separator);
+            wireTags = collapse(wire);
+            if (overBudget(wireTags.join(separator))) {
+              // Last resort: the bucket is purged by every write, so even a
+              // page whose table tags alone blow the budget stays safe
+              // (over-purged, never stale).
+              wireTags = [unknownWire, allWire];
+            }
           }
-          out.headers.set(header, value);
+          out.headers.set(header, wireTags.join(separator));
           out.headers.set(
             "Cache-Control",
             `max-age=0, s-maxage=${ttl}, stale-while-revalidate=${swr}`,
@@ -173,6 +228,12 @@ export function createPageCache(options: PageCacheOptions): PageCache {
           for (const [k, v] of Object.entries(options.cacheHeaders ?? {})) {
             out.headers.set(k, v);
           }
+          // Debug mirrors what actually went on the wire.
+          if (options.debug) {
+            out.headers.set("X-Cache-Tags", wireTags.join(" "));
+          }
+        } else if (options.debug) {
+          out.headers.set("X-Cache-Tags", [...tags].join(" "));
         }
         return out;
       };
@@ -182,10 +243,20 @@ export function createPageCache(options: PageCacheOptions): PageCache {
       ctx.addTags(tags);
     },
 
-    purgeTags(...tags) {
+    purge(...tags) {
+      for (const t of tags) pending.add(withPrefix(t));
+      return drain(true);
+    },
+
+    purgeAll() {
+      pending.add(allWire);
+      return drain(true);
+    },
+
+    purgeBatch(...tags) {
       schedulePurge(tags);
     },
 
-    flush: flushNow,
+    flush: () => drain(false),
   };
 }

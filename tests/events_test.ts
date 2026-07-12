@@ -1,4 +1,8 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { eq, sql } from "drizzle-orm";
 import { createPageCache } from "../page_cache.ts";
 import type { PageCacheEvent } from "../types.ts";
@@ -16,7 +20,7 @@ function withEvents(options: { settleMs?: number } = {}) {
   const purger = new RecordingPurger();
   const pageCache = createPageCache({
     schema,
-    purge: purger,
+    purger,
     settleMs: options.settleMs ?? 1,
     onEvent: (e) => events.push(e),
   });
@@ -30,7 +34,11 @@ Deno.test("purge-batch event fires with the flushed tags", async () => {
   await pageCache.flush();
   const batch = events.find((e) => e.kind === "purge-batch");
   assertEquals(batch?.kind, "purge-batch");
-  assertEquals([...(batch!.tags as string[])].sort(), ["posts", "posts:2"]);
+  assertEquals([...(batch!.tags as string[])].sort(), [
+    "dpc-unknown",
+    "posts",
+    "posts:2",
+  ]);
 });
 
 Deno.test("purge-error event fires when the purger throws", async () => {
@@ -38,7 +46,7 @@ Deno.test("purge-error event fires when the purger throws", async () => {
   const base = createTestContext();
   const pageCache = createPageCache({
     schema,
-    purge: {
+    purger: {
       // deno-lint-ignore require-await
       purge: async () => {
         throw new Error("endpoint down");
@@ -53,10 +61,13 @@ Deno.test("purge-error event fires when the purger throws", async () => {
   await pageCache.flush();
   const err = events.find((e) => e.kind === "purge-error");
   assertEquals(err?.kind, "purge-error");
-  assertEquals((err as { tags: readonly string[] }).tags, ["posts"]);
+  assertEquals([...(err as { tags: readonly string[] }).tags].sort(), [
+    "dpc-unknown",
+    "posts",
+  ]);
 });
 
-Deno.test("wildcard-tag event fires once per reason (deduplicated)", async () => {
+Deno.test("unobserved-read event fires once per reason (deduplicated)", async () => {
   const { db, pageCache, events } = withEvents();
   const handler = pageCache.middleware(async () => {
     // subquery-ish non-table from(): raw SQL fragment is opaque to the facade
@@ -65,18 +76,18 @@ Deno.test("wildcard-tag event fires once per reason (deduplicated)", async () =>
     return new Response("ok");
   });
   await handler(new Request("http://localhost/p"));
-  const wildcards = events.filter((e) => e.kind === "wildcard-tag");
-  assertEquals(wildcards.length, 1);
+  const unobservedReads = events.filter((e) => e.kind === "unobserved-read");
+  assertEquals(unobservedReads.length, 1);
 });
 
-Deno.test("wildcard-tagged response carries the * tag", async () => {
+Deno.test("opaque-read response carries the unknown-bucket tag", async () => {
   const { db, pageCache } = withEvents();
   const handler = pageCache.middleware(async () => {
     await db.select({ n: sql<number>`1` }).from(sql`(select 1)`);
     return new Response("ok");
   });
   const res = await handler(new Request("http://localhost/p"));
-  assertEquals(res.headers.get("Surrogate-Key"), "*");
+  assertEquals(res.headers.get("Surrogate-Key"), "dpc-unknown dpc-all");
 });
 
 Deno.test("header-overflow collapses row tags to table tags and emits", async () => {
@@ -84,7 +95,7 @@ Deno.test("header-overflow collapses row tags to table tags and emits", async ()
   const base = createTestContext();
   const pageCache = createPageCache({
     schema,
-    purge: new RecordingPurger(),
+    purger: new RecordingPurger(),
     maxHeaderBytes: 20,
     onEvent: (e) => events.push(e),
   });
@@ -98,17 +109,78 @@ Deno.test("header-overflow collapses row tags to table tags and emits", async ()
   });
   const res = await handler(new Request("http://localhost/p"));
   assertEquals(res.headers.get("Surrogate-Key")?.split(" ").sort(), [
+    "dpc-all",
     "posts",
     "users",
   ]);
   assertEquals(events.filter((e) => e.kind === "header-overflow").length, 1);
 });
 
+Deno.test("header budget is measured in UTF-8 bytes, not UTF-16 code units", async () => {
+  const events: PageCacheEvent[] = [];
+  const base = createTestContext();
+  const pageCache = createPageCache({
+    schema,
+    purger: new RecordingPurger(),
+    tagPrefix: "é_", // 2 code units, 3 UTF-8 bytes
+    maxHeaderBytes: 25,
+    onEvent: (e) => events.push(e),
+  });
+  const _db = pageCache.wrap(base.raw);
+  const handler = pageCache.middleware(() => {
+    pageCache.tag("posts:123456");
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  // "é_posts:123456 é_dpc-all" = 24 code units but 26 UTF-8 bytes → over
+  // the 25-byte budget, so row tags must collapse.
+  assertEquals(res.headers.get("Surrogate-Key"), "é_posts é_dpc-all");
+  assertEquals(events.filter((e) => e.kind === "header-overflow").length, 1);
+});
+
+Deno.test("still over budget after collapse → degrade to the reserved tags", async () => {
+  const events: PageCacheEvent[] = [];
+  const base = createTestContext();
+  const pageCache = createPageCache({
+    schema,
+    purger: new RecordingPurger(),
+    maxHeaderBytes: 25,
+    onEvent: (e) => events.push(e),
+  });
+  const _db = pageCache.wrap(base.raw);
+  const handler = pageCache.middleware(() => {
+    for (let i = 10; i < 30; i++) pageCache.tag(`t${i}`); // 20 table-level tags
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  // Table tags alone blow the budget; the safe floor is the bucket (purged
+  // on every write) plus the all-pages tag.
+  assertEquals(res.headers.get("Surrogate-Key"), "dpc-unknown dpc-all");
+  assertEquals(events.filter((e) => e.kind === "header-overflow").length, 1);
+});
+
+Deno.test("debug: X-Cache-Tags mirrors the wire tags on cacheable responses", async () => {
+  const base = createTestContext();
+  const pageCache = createPageCache({
+    schema,
+    purger: new RecordingPurger(),
+    debug: true,
+  });
+  const db = pageCache.wrap(base.raw);
+  const handler = pageCache.middleware(async () => {
+    await db.select().from(posts).where(eq(posts.id, 3));
+    return new Response("ok");
+  });
+  const res = await handler(new Request("http://localhost/p"));
+  assertEquals(res.headers.get("Surrogate-Key"), "posts:3 dpc-all");
+  assertEquals(res.headers.get("X-Cache-Tags"), "posts:3 dpc-all");
+});
+
 Deno.test("debug: true exposes X-Cache-Tags even on excluded paths", async () => {
   const base = createTestContext();
   const pageCache = createPageCache({
     schema,
-    purge: new RecordingPurger(),
+    purger: new RecordingPurger(),
     debug: true,
   });
   const db = pageCache.wrap(base.raw);
@@ -128,7 +200,7 @@ Deno.test("tagPrefix namespaces derived tags, manual tags, and purges", async ()
   const purger = new RecordingPurger();
   const pageCache = createPageCache({
     schema,
-    purge: purger,
+    purger,
     settleMs: 1,
     tagPrefix: "shop_",
   });
@@ -142,21 +214,40 @@ Deno.test("tagPrefix namespaces derived tags, manual tags, and purges", async ()
   const res = await handler(new Request("http://localhost/p"));
   assertEquals(res.headers.get("Surrogate-Key")?.split(" ").sort(), [
     "shop_custom",
+    "shop_dpc-all",
     "shop_posts:7",
   ]);
 
   await db.update(posts).set({ title: "x" }).where(eq(posts.id, 7));
-  pageCache.purgeTags("custom");
+  pageCache.purgeBatch("custom");
   await new Promise((r) => setTimeout(r, 5));
   await pageCache.flush();
-  assertEquals(purger.all, ["shop_custom", "shop_posts", "shop_posts:7"]);
+  assertEquals(purger.all, [
+    "shop_custom",
+    "shop_dpc-unknown",
+    "shop_posts",
+    "shop_posts:7",
+  ]);
 });
 
-Deno.test("tagPrefix applies to the wildcard bucket too", async () => {
+Deno.test("unknownTag colliding with a table name throws at init", () => {
+  assertThrows(
+    () =>
+      createPageCache({
+        schema,
+        purger: new RecordingPurger(),
+        unknownTag: "posts",
+      }),
+    Error,
+    "collides",
+  );
+});
+
+Deno.test("tagPrefix applies to the unknown bucket too", async () => {
   const base = createTestContext();
   const pageCache = createPageCache({
     schema,
-    purge: new RecordingPurger(),
+    purger: new RecordingPurger(),
     tagPrefix: "shop_",
   });
   const db = pageCache.wrap(base.raw);
@@ -165,7 +256,10 @@ Deno.test("tagPrefix applies to the wildcard bucket too", async () => {
     return new Response("ok");
   });
   const res = await handler(new Request("http://localhost/p"));
-  assertEquals(res.headers.get("Surrogate-Key"), "shop_*");
+  assertEquals(
+    res.headers.get("Surrogate-Key"),
+    "shop_dpc-unknown shop_dpc-all",
+  );
 });
 
 Deno.test("default (no onEvent): purge errors are logged, not thrown", async () => {
@@ -176,7 +270,7 @@ Deno.test("default (no onEvent): purge errors are logged, not thrown", async () 
   try {
     const pageCache = createPageCache({
       schema,
-      purge: {
+      purger: {
         // deno-lint-ignore require-await
         purge: async () => {
           throw new Error("down");

@@ -25,7 +25,7 @@ response header, and purged when writes touch the same tables or rows.
 **Contents:** [Installation](#installation) · [Quickstart](#quickstart) ·
 [Tag model](#tag-model) · [Purgers](#purgers) · [Observability](#observability)
 · [Namespacing](#namespacing-tagprefix) · [Development](#development) ·
-[Status](#status) · [License](#license)
+[License](#license)
 
 ## Installation
 
@@ -64,11 +64,11 @@ const db = pageCache.wrap(drizzle(client, { schema }));
 export default { fetch: pageCache.middleware(app.fetch) };
 ```
 
-Every cacheable response (by default: `GET`, 2xx, path not under `/admin`) now
-carries:
+Every cacheable response that touched the DB (by default: `GET`, 2xx, path not
+under `/admin`) now carries:
 
 ```
-Surrogate-Key: posts:7 users
+Surrogate-Key: posts:7 users dpc-all
 Cache-Control: max-age=0, s-maxage=3600, stale-while-revalidate=30
 ```
 
@@ -88,31 +88,53 @@ rollback.
 | single row by PK/unique equality (miss) | `posts:7` + `posts`          | any write to `posts`   |
 | list / filtered / ordered reads         | `posts`                      | any write to `posts`   |
 | joins & relational `with`               | tags for each table involved | writes to either table |
-| anything unrecognized                   | `*`                          | every purge            |
+| anything unrecognized                   | `dpc-unknown`                | every purge            |
+| every tagged page (always)              | `dpc-all`                    | `purgeAll()` only      |
+
+Two reserved tags (rename with `unknownTag` / `allTag` — any name except a
+table name, rejected at init):
+
+- `dpc-unknown` is the **unknown bucket**: every purge batch carries it, so a
+  page the wrapper couldn't read can never outlive a write.
+- `dpc-all` rides **every tagged response** and no automatic purge — one
+  deliberate purge of it flushes everything this cache made cacheable.
 
 Escape hatches for pages the wrapper can't see through (raw SQL, computed
 pages):
 
 ```ts
 pageCache.tag("posts:7"); // add a tag to the current request
-pageCache.purgeTags("posts"); // trigger a purge manually
+pageCache.purgeBatch("posts"); // join the pending purge batch (fire-and-forget)
+await pageCache.purge("posts"); // purge immediately — REJECTS on failure
 ```
+
+### Deploys: purge everything
+
+A release changes templates and assets, so cached pages are stale with no DB
+write to say so. Drizzle apps already run JS on deploy — purge right after
+migrating:
+
+```ts
+// deploy.ts — after `drizzle-kit migrate`
+import { pageCache } from "./cache.ts"; // the same instance your app builds
+await pageCache.purgeAll(); // immediate; throws → deploy fails loudly
+```
+
+`createPageCache` needs no DB connection for this — `schema` is a plain
+import, and `purgeAll()` only talks to the proxy. No JS runtime in the
+pipeline? Purge the literal tag (mind your `tagPrefix`) with one request in
+each dialect, e.g. nginx/Angie:
+`curl -X POST http://proxy/__dpc/purge -H 'Surrogate-Key: dpc-all'`. Note the
+scope: `purgeAll()` evicts what **this cache tagged** — pages a proxy cached
+by its own config (no headers from us) only expire by TTL.
 
 ## Purgers
 
 Each supported cache has a directory entrypoint — drizzle-adapter style — that
-wires its purger from a `site` URL. Entrypoints are named by **wire dialect**,
-with product aliases for discoverability:
-
-- `drizzle-page-cache/surrogate-key` — `Surrogate-Key` header + a `POST` purge
-  endpoint (the wire shape of Fastly's batch purge API; also serves any CDN that
-  accepts it). Product aliases: `/nginx` and `/angie` (nginx family made
-  tag-aware by this package's Lua helper, see below).
-- `drizzle-page-cache/xkey` — `xkey` header + `PURGE`. Product alias:
-  `/varnish`.
-- `drizzle-page-cache/souin` — Souin's API (Caddy cache-handler).
-- `drizzle-page-cache/litespeed` — OpenLiteSpeed's header-driven dialect (see
-  below).
+wires its purger from a `site` URL. Entrypoints are named by **wire dialect**
+(`/surrogate-key`, `/xkey`, `/souin`, `/litespeed`) with product aliases for
+discoverability (`/nginx`, `/angie`, `/varnish`) — each covered in a section
+below.
 
 For anything else, use the root `createPageCache` with a purger — built in:
 `litespeedPurger`, `souinPurger`, `varnishPurger`, `nginxPurger`,
@@ -147,8 +169,9 @@ is verified by `e2e/verify.sh caddy` (and `caddy-node`, `caddy-bun`).
 
 ### Varnish (xkey)
 
-The entrypoint sends one `PURGE` to `site` with the tags in an `xkey` header, so
-your VCL needs the **xkey vmod** and a PURGE handler:
+The entrypoint (`drizzle-page-cache/xkey`; `/varnish` is an alias) sends one
+`PURGE` to `site` with the tags in an `xkey` header, so your VCL needs the
+**xkey vmod** and a PURGE handler:
 
 ```vcl
 vcl 4.1;
@@ -193,12 +216,13 @@ const pageCache = createPageCache({
 One `token` guards both halves of the purge loop (the middleware's echo route
 and the purger that fetches it **via the proxy** — a purge header the proxy
 never sees purges nothing); one `site` keeps their paths in agreement; one `ttl`
-keeps the two cache-control headers coherent; and the `*` wildcard is renamed
-automatically (a literal `*` purge flushes LiteSpeed's **entire** cache — the
-entrypoint refuses it). The dialect-controlled options (`header`,
-`headerSeparator`, `cacheHeaders`, `wildcardTag`, `purge`, `purgeEcho`) are
-rejected at compile time; for a custom setup, use the root `createPageCache`
-with those options explicitly:
+keeps the two cache-control headers coherent; and `unknownTag` must never be
+`*` — a literal `*` purge flushes LiteSpeed's **entire** cache, so the
+entrypoint refuses it (the default `dpc-unknown` is already safe). The
+dialect-controlled options (`header`, `headerSeparator`, `cacheHeaders`,
+`purger`, `purgeEcho`) are rejected at compile time; for a custom setup, use
+the
+root `createPageCache` with those options explicitly:
 
 <details>
 <summary>What the entrypoint configures (expanded reference)</summary>
@@ -206,14 +230,13 @@ with those options explicitly:
 ```ts
 createPageCache({
   schema,
-  purge: litespeedPurger(
+  purger: litespeedPurger(
     "https://example.com/__drizzle-page-cache/purge",
     token,
   ),
   header: "X-LiteSpeed-Tag",
   headerSeparator: ",",
   cacheHeaders: { "X-LiteSpeed-Cache-Control": "public, max-age=300" },
-  wildcardTag: "dpc-wild",
   purgeEcho: { token },
 });
 ```
@@ -246,7 +269,10 @@ header — the wire shape of Fastly's batch purge API — and later requests who
 recorded tags were purged set `$skip_cache` for `proxy_cache_bypass`, refreshing
 the entry from upstream. The endpoint (its own nginx `location`) also serves
 Fastly-style `POST /__dpc/purge/<tag>` and `POST /__dpc/purge_all` for curl and
-ops tooling, with `PURGE` accepted as a method alias.
+ops tooling, with `PURGE` accepted as a method alias. Both `/nginx` and `/angie`
+are aliases of the canonical `drizzle-page-cache/surrogate-key` entrypoint —
+the same dialect serves Fastly, or any CDN that accepts a `Surrogate-Key` batch
+purge.
 
 It runs on any nginx with lua-nginx-module — distro packages (Alpine
 `nginx-mod-http-lua`, Debian/Ubuntu `libnginx-mod-http-lua`), OpenResty, or
@@ -312,7 +338,7 @@ default logging is disabled):
 
 ```ts
 onEvent: (e) => {
-  // 'wildcard-tag'      a read was opaque → over-purging (safe); deduped by reason
+  // 'unobserved-read'   a read was opaque → over-purging (safe); deduped by reason
   // 'unobserved-write'  a write was opaque → possible staleness (fix these)
   // 'purge-batch'       what was purged, when — debugging gold
   // 'purge-error'       purger threw
@@ -321,21 +347,23 @@ onEvent: (e) => {
 },
 ```
 
-**Debugging staleness locally**: set `debug: true` to expose the computed tags
-as `X-Cache-Tags` on every response (including uncacheable/excluded paths), and
-log `purge-batch` — together they answer "why did(n't) this page refresh." Never
-enable `debug` in production; it leaks schema names.
+**Debugging staleness locally**: set `debug: true` to expose the tags as
+`X-Cache-Tags` on every response (including uncacheable/excluded paths) — on
+cacheable responses it mirrors the wire header exactly, `dpc-all` and all —
+and log `purge-batch`; together they answer "why did(n't) this page refresh."
+Never enable `debug` in production; it leaks schema names.
 
 ## Namespacing (`tagPrefix`)
 
 Running several apps or drizzle instances behind one shared cache/CDN? Without
 namespacing, both apps tagging `posts` would purge each other's pages. A prefix
-is applied to every tag — derived, manual, and the `*` wildcard bucket — and to
-every purge, so reads and purges always agree:
+is applied to every tag — derived, manual, and the `dpc-unknown` bucket — and
+to every purge, so reads and purges always agree:
 
 ```ts
-createPageCache({ schema, purge, tagPrefix: "shop_" });
-// → Surrogate-Key: shop_posts:7 shop_users   · purges: shop_posts:7 shop_posts
+createPageCache({ schema, purger, tagPrefix: "shop_" });
+// → Surrogate-Key: shop_posts:7 shop_users shop_dpc-all
+// → purges: shop_posts:7 shop_posts shop_dpc-unknown
 ```
 
 Prefer a non-`:` separator (like `shop_`) so tag→table mapping in purgers keeps

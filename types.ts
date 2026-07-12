@@ -12,12 +12,13 @@ export type Handler = (req: Request) => Promise<Response> | Response;
  * two that can mean stale pages. Supplying `onEvent` takes over ALL events.
  */
 export type PageCacheEvent =
-  /** A read was opaque to the facade → wildcard tag (over-purging, safe).
+  /** A read was opaque to the facade → unknown-bucket tag (over-purging, safe).
    * Deduplicated by `reason` for the lifetime of the instance. */
-  | { kind: "wildcard-tag"; reason: string }
-  /** A write was opaque to the facade → its purge only reaches the wildcard
+  | { kind: "unobserved-read"; reason: string }
+  /** A write was opaque to the facade → its purge only reaches the unknown
    * bucket, so properly-tagged pages may go stale until TTL. The dangerous
-   * direction — fix with `purgeTags()` or a recognizable statement. */
+   * direction — fix with `purge()`/`purgeBatch()` or a recognizable
+   * statement. */
   | { kind: "unobserved-write"; reason: string }
   /** A purge batch was handed to the purger (debug-level). */
   | { kind: "purge-batch"; tags: readonly string[] }
@@ -30,7 +31,10 @@ export type PageCacheEvent =
 export interface PageCacheOptions {
   /** Your drizzle schema — source of table names, PKs, and relations. */
   schema: Record<string, unknown>;
-  purge: Purger;
+  /** The tag-aware cache/CDN purges are sent to — built in: `souinPurger`,
+   * `varnishPurger`, `nginxPurger`, `litespeedPurger`, `webhookPurger`; or
+   * implement {@link Purger} (one method). Dialect entrypoints wire this. */
+  purger: Purger;
   /** Shared-cache TTL in seconds (`s-maxage`). The backstop, not the mechanism. Default 3600. */
   ttl?: number;
   /** `stale-while-revalidate` in seconds. Default 30. */
@@ -44,10 +48,16 @@ export interface PageCacheOptions {
   /** Extra headers set verbatim on cacheable responses, e.g. LiteSpeed's
    * `{ 'X-LiteSpeed-Cache-Control': 'public, max-age=300' }`. */
   cacheHeaders?: Record<string, string>;
-  /** Replacement for the `*` wildcard tag on both responses and purges.
-   * REQUIRED for LiteSpeed: a literal `X-LiteSpeed-Purge: *` flushes the
-   * entire cache, so map the unknown-bucket to e.g. 'dpc-wild'. */
-  wildcardTag?: string;
+  /** Wire name of the unknown-bucket tag on both responses and purges.
+   * Default 'dpc-unknown'. Must not equal a table name (checked at init).
+   * Never a literal `*` on LiteSpeed — an `X-LiteSpeed-Purge: *` flushes
+   * the entire cache. */
+  unknownTag?: string;
+  /** Wire name of the all-pages tag, stamped on every response the
+   * middleware tags. Never purged automatically — `purgeAll()` purges it
+   * (deploy/release invalidation). Default 'dpc-all'. Must not equal a
+   * table name or `unknownTag` (checked at init). */
+  allTag?: string;
   /**
    * Serve a purge-echo route from the middleware, for servers that purge via
    * response headers flowing THROUGH the proxy (LiteSpeed/OpenLiteSpeed)
@@ -71,7 +81,8 @@ export interface PageCacheOptions {
   /** Debounce window for purge batching, ms. Default 50. */
   settleMs?: number;
   /**
-   * Prefix applied verbatim to every tag — derived, manual, wildcard — and to
+   * Prefix applied verbatim to every tag — derived, manual, unknown bucket —
+   * and to
    * every purge, so reads and purges always agree. Use it to namespace
    * multiple apps/drizzle instances sharing one cache (e.g. `'shop_'` →
    * `shop_posts:7`). Prefer a non-`:` separator so purger table-mapping
@@ -84,10 +95,14 @@ export interface PageCacheOptions {
    * console logging for purge-error / unobserved-write when supplied. */
   onEvent?: (event: PageCacheEvent) => void;
   /** Collapse row tags to table tags when the header would exceed this many
-   * bytes (some proxies reject large headers). Default 7900. */
+   * UTF-8 bytes (some proxies reject large headers); if even table tags
+   * exceed it, the header degrades to the reserved tags (the bucket is
+   * purged on every write — over-purged, never stale). Default 7900. */
   maxHeaderBytes?: number;
   /** Dev only: also expose tags as `X-Cache-Tags` on every response that has
-   * them (including excluded paths). Leaks schema names — never in prod. */
+   * them (including excluded paths). On cacheable responses it mirrors the
+   * wire header exactly (`allTag`, overflow collapse and all); elsewhere,
+   * the derived tags. Leaks schema names — never in prod. */
   debug?: boolean;
 }
 
@@ -98,8 +113,21 @@ export interface PageCache {
   middleware(handler: Handler): Handler;
   /** Manually add tags to the current request (raw SQL, computed pages). */
   tag(...tags: string[]): void;
-  /** Manually schedule a purge (CMS hooks, cron, admin tooling). */
-  purgeTags(...tags: string[]): void;
-  /** Flush any pending purge batch immediately (mainly for tests/shutdown). */
+  /** Purge immediately: drains the pending batch plus `tags` in one send.
+   * Resolves once the purger accepted it and REJECTS on failure — deploy
+   * scripts get a real exit code. With no arguments and nothing pending, it
+   * reports the most recent send, so a just-failed batch never reads as
+   * success. Also observable as purge-batch / purge-error events. */
+  purge(...tags: string[]): Promise<void>;
+  /** Purge every page this cache tagged (one send of `allTag`) — immediate,
+   * rejects on failure. The deploy/release hook; run it after migrations. */
+  purgeAll(): Promise<void>;
+  /** Join the pending purge batch: deduplicated, settled (`settleMs`), and
+   * flushed alongside write-derived purges (the purge-batch event).
+   * Fire-and-forget — failures surface as purge-error events, not throws.
+   * For CMS hooks and admin tooling inside the request path. */
+  purgeBatch(...tags: string[]): void;
+  /** Drain the pending batch, swallowing failures (logged / purge-error
+   * event) — for shutdown and tests. `purge()` is the throwing sibling. */
   flush(): Promise<void>;
 }
