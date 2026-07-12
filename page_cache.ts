@@ -107,12 +107,16 @@ export function createPageCache(options: PageCacheOptions): PageCache {
   const unknownWire = withPrefix(unknownTag);
   const allWire = withPrefix(allTag);
   const encoder = new TextEncoder();
-  // `maxHeaderBytes` is a BYTE budget; `.length` (UTF-16 code units) never
-  // exceeds the UTF-8 byte count, so the cheap check short-circuits the
-  // encode for the common all-ASCII case only when already over.
-  const overBudget = (value: string): boolean =>
-    value.length > maxHeaderBytes ||
-    encoder.encode(value).length > maxHeaderBytes;
+  const nonAscii = /[^\x00-\x7F]/;
+  // `maxHeaderBytes` is a BYTE budget. UTF-16 code units never exceed UTF-8
+  // bytes, so an over-length string is over-budget without encoding; an
+  // all-ASCII string has bytes === length; only non-ASCII values at or
+  // under the budget pay the encode (no allocation on the common path).
+  const overBudget = (value: string): boolean => {
+    if (value.length > maxHeaderBytes) return true;
+    if (!nonAscii.test(value)) return false;
+    return encoder.encode(value).length > maxHeaderBytes;
+  };
 
   // -- purge queue: dedupe + settle; flush() for tests/shutdown ---------------
   let pending = new Set<string>();
