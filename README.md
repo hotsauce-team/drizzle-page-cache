@@ -568,6 +568,23 @@ The e2e suite needs Docker; it brings the proxy stack up and down itself
 (`e2e/docker-compose.yml`). Issues and PRs welcome — a failing test or a
 `verify.sh` transcript is the fastest way to get a bug fixed.
 
+### Releasing
+
+Bump `version` in `deno.json`, merge to `main`, then tag and push:
+
+```bash
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+CI (`.github/workflows/publish.yml`) verifies the tag is on `main` and matches
+the `deno.json` version, runs the checks and tests, and publishes to **npm**
+with provenance via OIDC
+([trusted publishing](https://docs.npmjs.com/trusted-publishers/) — no tokens
+stored anywhere). JSR publishing is currently disabled in the workflow
+(commented out). The npm package is built by `scripts/build_npm.ts` (dnt),
+which reads the version from `deno.json`; to build or publish it by hand:
+`deno task build:npm && cd npm && npm publish`.
+
 ## License
 
 [MIT](LICENSE) © Hotsauce Team
