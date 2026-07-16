@@ -12,6 +12,15 @@ helper) and get **automatic, event-driven invalidation**: cache tags are derived
 from the queries each request actually executes, emitted as a `Surrogate-Key`
 response header, and purged when writes touch the same tables or rows.
 
+> [!NOTE]
+> This is **not**
+> [Drizzle's built-in `cache` option](https://orm.drizzle.team/docs/cache). That
+> first-party feature caches SELECT query _results_ (in Redis, e.g. Upstash)
+> inside your app, saving database round-trips. This package operates a layer
+> further out: it invalidates whole cached _pages_ in the HTTP proxy/CDN in
+> front of your app, saving the render as well as the queries. They solve
+> different problems and can be used together.
+
 **Contents:** [Why a page cache?](#why-a-page-cache) ·
 [Installation](#installation) · [Quickstart](#quickstart) ·
 [What gets cached](#what-gets-cached) · [Tag model](#tag-model) ·
