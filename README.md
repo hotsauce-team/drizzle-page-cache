@@ -312,13 +312,10 @@ curl -sI https://your-site.example/any-page |
 # no output = not leaking
 ```
 
-Stripping the wire header isn't the whole story — the same table and row
-identifiers can escape two other ways. `debug: true` stamps them onto a
-_separate_ `X-Cache-Tags` header on every response (see
-[Observability](#observability)); your proxy strips `Surrogate-Key`, not that
-one, so keep `debug` off in production. And `tagPrefix` namespaces tags but
-doesn't hide them — `shop_posts:7` still names the table and the row, so don't
-mistake a prefix for obfuscation.
+Stripping the wire header isn't the whole story: `debug: true` stamps the same
+table and row identifiers onto a _separate_ `X-Cache-Tags` header on every
+response (see [Observability](#observability)), and your proxy strips
+`Surrogate-Key`, not that one — so keep `debug` off in production.
 
 ## Purgers
 
