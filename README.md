@@ -76,11 +76,11 @@ invalidate.
 ## Installation
 
 ```bash
-# Deno
-deno add jsr:@hotsauce/drizzle-page-cache
-
 # Node / Bun
 npm install drizzle-page-cache
+
+# Deno
+deno add npm:drizzle-page-cache
 ```
 
 `drizzle-orm` (>=0.44 <1) is a peer dependency — you already have it. Nothing
@@ -88,9 +88,7 @@ else is pulled in.
 
 Works on Deno, Node ≥ 18, and Bun. Cloudflare Workers needs the
 [`nodejs_compat`](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)
-flag (for `AsyncLocalStorage`). Code samples below use the npm specifier
-`drizzle-page-cache/...`; on Deno/JSR the same entrypoints live under
-`@hotsauce/drizzle-page-cache/...`.
+flag (for `AsyncLocalStorage`).
 
 ## Quickstart
 
@@ -101,7 +99,7 @@ proxy is what stores the pages — without one, nothing is cached).
 
 ```ts
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { createPageCache } from "@hotsauce/drizzle-page-cache/souin";
+import { createPageCache } from "drizzle-page-cache/souin";
 import * as schema from "./schema.ts"; // your drizzle schema
 
 const pageCache = createPageCache({
@@ -291,14 +289,14 @@ Each supported cache has a directory entrypoint — drizzle-adapter style — th
 wires its purger from a `site` URL. Entrypoints are named by **wire dialect**,
 with product aliases for discoverability:
 
-- `@hotsauce/drizzle-page-cache/surrogate-key` — `Surrogate-Key` header + a
+- `drizzle-page-cache/surrogate-key` — `Surrogate-Key` header + a
   `POST` purge endpoint (the wire shape of Fastly's batch purge API; also serves
   any CDN that accepts it). Product aliases: `/nginx` and `/angie` (nginx family
   made tag-aware by this package's Lua helper, see below).
-- `@hotsauce/drizzle-page-cache/xkey` — `xkey` header + `PURGE`. Product alias:
+- `drizzle-page-cache/xkey` — `xkey` header + `PURGE`. Product alias:
   `/varnish`.
-- `@hotsauce/drizzle-page-cache/souin` — Souin's API (Caddy cache-handler).
-- `@hotsauce/drizzle-page-cache/litespeed` — OpenLiteSpeed's header-driven
+- `drizzle-page-cache/souin` — Souin's API (Caddy cache-handler).
+- `drizzle-page-cache/litespeed` — OpenLiteSpeed's header-driven
   dialect (see below).
 
 For anything else, use the root `createPageCache` with a purger — built in:
@@ -329,8 +327,14 @@ you must enable server-side**: the `api { souin }` line in the
 [Quickstart](#quickstart) Caddyfile.
 
 The entrypoint (`site`, plus `apiPath` — default `/souin-api/souin`) sends one
-`PURGE` there with the tags in a `Surrogate-Key` header. If you drive Caddy by
-its **JSON** config (API/`caddy adapt`) rather than a Caddyfile, the
+`PURGE` there with the tags in a `Surrogate-Key` header. Note Souin parses
+`Surrogate-Key` as **comma**-separated — unlike the space-separated Fastly
+convention — so this dialect emits and purges tags comma-joined (a
+space-joined header would be stored as one composite key that no purge ever
+matches); the header name and separator are dialect-controlled here.
+
+If you drive Caddy by its **JSON** config (API/`caddy adapt`) rather than a
+Caddyfile, the
 cache-handler plugin needs the API turned on there too — see BENCHMARKS.md
 findings 1–2 for the patched-JSON caveat. Working config: `e2e/Caddyfile`
 (adapted to `e2e/caddy.json` by `gen-caddy-json.sh`); the write → tag-purge loop
@@ -371,7 +375,7 @@ dedicated entrypoint — drizzle-adapter style — which derives the whole diale
 from three inputs:
 
 ```ts
-import { createPageCache } from "@hotsauce/drizzle-page-cache/litespeed";
+import { createPageCache } from "drizzle-page-cache/litespeed";
 
 const pageCache = createPageCache({
   schema,
@@ -420,7 +424,7 @@ Stock nginx has no tag support — this package ships
 row-precise as on the tag-native proxies and there is nothing to declare:
 
 ```ts
-import { createPageCache } from "@hotsauce/drizzle-page-cache/nginx"; // or /angie — identical
+import { createPageCache } from "drizzle-page-cache/nginx"; // or /angie — identical
 
 const pageCache = createPageCache({
   schema,
