@@ -127,19 +127,21 @@ Souin is a Caddy plugin, so it takes a custom-built Caddy binary (a two-line
 ```
 {
   order cache before rewrite
+  order header before cache   # run the strip below AFTER Souin reads the tags
   cache {
     ttl 300s
     api { souin }   # exposes the purge API at /souin-api/souin
   }
 }
 :80 {
+  header -Surrogate-Key   # tags name your tables + row IDs — keep them off clients
   cache
   reverse_proxy your-app:8000
 }
 ```
 
-Every cacheable response (see [What gets cached](#what-gets-cached) — by default
-`GET` and 2xx) now carries:
+Your app now tags every cacheable response (see
+[What gets cached](#what-gets-cached) — by default `GET` and 2xx) with:
 
 ```
 Surrogate-Key: posts:7 users dpc-all
@@ -151,8 +153,8 @@ hold pages.
 
 > [!IMPORTANT]
 > That `Surrogate-Key` header names your tables and row IDs. It's for the cache,
-> not the browser — configure your proxy to strip it before it reaches clients.
-> See [Security](#security-the-tag-header-leaks-row-ids).
+> not the browser — the config above strips it before it reaches clients. For
+> other proxies, see [Security](#security-the-tag-header-leaks-row-ids).
 
 When a write executes — `db.update(posts).set(...).where(eq(posts.id, 7))` — the
 matching tags (`posts:7`, `posts`) are purged automatically, batched and
