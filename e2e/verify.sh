@@ -7,7 +7,7 @@
 # purge API contract. nginx-ls runs purge_litespeed.lua: the LiteSpeed
 # dialect (header-driven purging via the litespeed entrypoint) on plain
 # nginx.
-# Usage: ./verify.sh [ols|caddy|caddy-node|caddy-bun|angie|nginx|nginx-ls|all]  (default: caddy)
+# Usage: ./verify.sh [ols|caddy|caddy-node|caddy-bun|varnish|angie|nginx|nginx-ls|all]  (default: caddy)
 # `all` sweeps every target, streams each step live, keeps going past
 # failures, and ends with a PASS/FAIL summary table (non-zero exit on any
 # failure). Full run: ./verify.sh all
@@ -29,9 +29,8 @@ if [ -z "$(docker compose ps -q --status running 2>/dev/null)" ]; then
   sleep 3 # proxies without healthchecks need a beat after their apps go healthy
 fi
 
-# Preference order: OLS, Caddy (Deno/Node/Bun), Angie, nginx (Varnish is a
-# bench-only pairing — no purge loop to verify).
-ALL_TARGETS="ols caddy caddy-node caddy-bun angie nginx nginx-ls"
+# Preference order: OLS, Caddy (Deno/Node/Bun), Varnish, Angie, nginx.
+ALL_TARGETS="ols caddy caddy-node caddy-bun varnish angie nginx nginx-ls"
 
 if [ "$HOST" = "all" ]; then
   self="$0"
@@ -77,10 +76,14 @@ case "$HOST" in angie | nginx | nginx-ls) LUA=1 ;; *) LUA="" ;; esac
 case "$HOST" in angie | nginx) PURGE_API=1 ;; *) PURGE_API="" ;; esac
 # The tag header carries schema names and row IDs — it is the proxy's job to
 # strip it before the client sees it (see README "Security"). Which header
-# depends on the dialect: LiteSpeed uses X-LiteSpeed-Tag, everyone else
-# Surrogate-Key. Souin leaks on hit AND miss, OLS on the miss only, so the
-# assertion below checks both.
-case "$HOST" in ols | nginx-ls) TAG_HEADER='x-litespeed-tag' ;; *) TAG_HEADER='surrogate-key' ;; esac
+# depends on the dialect: LiteSpeed uses X-LiteSpeed-Tag, Varnish xkey,
+# everyone else Surrogate-Key. Souin leaks on hit AND miss, OLS on the miss
+# only, so the assertion below checks both.
+case "$HOST" in
+  ols | nginx-ls) TAG_HEADER='x-litespeed-tag' ;;
+  varnish) TAG_HEADER='xkey' ;;
+  *) TAG_HEADER='surrogate-key' ;;
+esac
 
 # Assert the dialect tag header did NOT reach the client for $1 (a step label
 # in $2). Runs its own request, so pass a fresh path to test a MISS.

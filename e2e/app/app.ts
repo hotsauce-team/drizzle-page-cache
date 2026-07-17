@@ -11,6 +11,7 @@ import { createPageCache as createSouinPageCache } from "../../src/dialects/soui
 import { createPageCache as createAngiePageCache } from "../../src/dialects/angie.ts";
 import { createPageCache as createNginxPageCache } from "../../src/dialects/nginx.ts";
 import { createPageCache as createLiteSpeedPageCache } from "../../src/dialects/litespeed.ts";
+import { createPageCache as createVarnishPageCache } from "../../src/dialects/varnish.ts";
 import type { Handler } from "../../src/types.ts";
 
 export const posts = sqliteTable("posts", {
@@ -38,8 +39,9 @@ export function createHandler(exec: SqliteExec): Handler {
   // Each PURGE_STYLE dogfoods its directory entrypoint: litespeed
   // (header-driven purging), angie and nginx (tag purging via
   // nginx/purge.lua — angie through its lua module, nginx through
-  // nginx-mod-http-lua), and the default, souin (PURGE API). PURGE_SITE
-  // is the proxy's base URL.
+  // nginx-mod-http-lua), varnish (xkey tags on responses, PURGE with an
+  // xkey header — via the /varnish product alias), and the default, souin
+  // (PURGE API). PURGE_SITE is the proxy's base URL.
   const style = process.env.PURGE_STYLE;
   const token = process.env.PURGE_TOKEN ?? "e2e-secret";
 
@@ -64,6 +66,13 @@ export function createHandler(exec: SqliteExec): Handler {
       ttl: 300,
       settleMs: 10,
       site: process.env.PURGE_SITE ?? "http://nginx",
+    })
+    : style === "varnish"
+    ? createVarnishPageCache({
+      schema,
+      ttl: 300,
+      settleMs: 10,
+      site: process.env.PURGE_SITE ?? "http://varnish",
     })
     : createSouinPageCache({
       schema,

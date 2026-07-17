@@ -89,6 +89,26 @@ Deno.test("varnish entrypoint: one PURGE to site with the xkey header", async ()
   assertEquals(keys.split(" ").sort(), ["dpc-unknown", "posts", "posts:3"]);
 });
 
+Deno.test("varnish entrypoint: response tags ride the xkey header, not Surrogate-Key", async () => {
+  // vmod-xkey registers keys from the `xkey` backend-response header only;
+  // a Surrogate-Key header would leave every object keyless (silent
+  // staleness — no purge ever matches).
+  const pageCache = createVarnishPageCache({
+    schema,
+    site: "http://localhost",
+    settleMs: 1,
+  });
+  const base = createTestContext();
+  const db = pageCache.wrap(base.raw);
+  const handler = pageCache.middleware(async () => {
+    await db.select().from(posts).where(eq(posts.id, 3));
+    return new Response("<html>post 3</html>");
+  });
+  const res = await handler(new Request("http://localhost/post/3"));
+  assertEquals(res.headers.get("xkey"), "posts:3 dpc-all");
+  assertEquals(res.headers.get("Surrogate-Key"), null);
+});
+
 Deno.test("nginx entrypoint: one POST to the purge endpoint with tags in Surrogate-Key", async () => {
   const pageCache = createNginxPageCache({
     schema,
@@ -153,6 +173,18 @@ Deno.test("entrypoints: `purge` is controlled and rejected at compile time", () 
     site: "http://localhost",
     // @ts-expect-error — `purger` is wired by the varnish entrypoint
     purger: noopPurger,
+  };
+  const _varnishHeader: Parameters<typeof createVarnishPageCache>[0] = {
+    schema,
+    site: "http://localhost",
+    // @ts-expect-error — the header is dialect-controlled (vmod-xkey reads `xkey` only)
+    header: "Surrogate-Key",
+  };
+  const _varnishSeparator: Parameters<typeof createVarnishPageCache>[0] = {
+    schema,
+    site: "http://localhost",
+    // @ts-expect-error — the separator is dialect-controlled (xkey is space-separated)
+    headerSeparator: ", ",
   };
   const _angie: Parameters<typeof createAngiePageCache>[0] = {
     schema,

@@ -18,14 +18,24 @@
  * module. Requires the xkey vmod and a VCL snippet handling PURGE
  * (`xkey.purge(req.http.xkey)`). For a custom purger, drop down to the root
  * `createPageCache`.
+ *
+ * Tags ride an `xkey` RESPONSE header too: on `import xkey;` the vmod
+ * registers keys from the `xkey` (or `X-HashTwo`) backend-response header —
+ * it never reads `Surrogate-Key`, so the default header would leave every
+ * object keyless and every purge silently matching nothing. The header name
+ * and separator are therefore dialect-controlled and rejected at compile
+ * time.
  */
 
 import { createPageCache as createCorePageCache } from "../page_cache.ts";
 import { normalizeSite, varnishPurger } from "../purgers.ts";
 import type { PageCache, PageCacheOptions } from "../types.ts";
 
+/** Keys the xkey dialect controls — not accepted by this entrypoint. */
+type ControlledKeys = "purger" | "header" | "headerSeparator";
+
 export interface XkeyPageCacheOptions
-  extends Omit<PageCacheOptions, "purger"> {
+  extends Omit<PageCacheOptions, ControlledKeys> {
   /** The proxy's base URL the PURGE is sent to, e.g. `http://localhost`. */
   site: string;
 }
@@ -34,6 +44,10 @@ export function createPageCache(options: XkeyPageCacheOptions): PageCache {
   const { site, ...rest } = options;
   return createCorePageCache({
     ...rest,
+    // vmod-xkey registers keys from the `xkey` backend-response header only;
+    // the default Surrogate-Key is never read and no purge would ever match.
+    header: "xkey",
+    headerSeparator: " ",
     purger: varnishPurger(normalizeSite(site)),
   });
 }
