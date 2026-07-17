@@ -187,7 +187,15 @@ function M.purge()
   elseif uri:find("/purge$") then
     local h = ngx.req.get_headers()["surrogate-key"]
     if type(h) == "table" then h = table.concat(h, " ") end
-    for tag in (h or ""):gmatch("[^%s,]+") do
+    -- Strictly space-separated (the Fastly shape). A comma means the client
+    -- speaks another dialect (e.g. Souin's) — reject rather than mis-purge.
+    if (h or ""):find(",", 1, true) then
+      return reply(
+        ngx.HTTP_BAD_REQUEST,
+        '{"status":"error","error":"comma in Surrogate-Key — tags are space-separated (Fastly-shaped)"}'
+      )
+    end
+    for tag in (h or ""):gmatch("%S+") do
       tags[#tags + 1] = tag
     end
     if #tags == 0 then
@@ -313,9 +321,24 @@ function M.log()
     or tonumber(cc:match("max%-age=(%d+)"))
   if not smax or smax == 0 then return end
   local swr = tonumber(cc:match("stale%-while%-revalidate=(%d+)")) or 0
-  local val = ngx.ctx.dpc_gen
-    .. "|"
-    .. (ngx.var.upstream_http_surrogate_key or "")
+  -- Strictly space-separated (the Fastly shape). A comma here means the app
+  -- speaks another dialect, or sent repeated Surrogate-Key headers (nginx
+  -- >= 1.23 joins those with ", "). Recording it verbatim would store tags
+  -- like "posts:3," that no purge matches — silent staleness. Refuse the
+  -- record instead: the entry stays an unknown key (refreshed every
+  -- request — safe, visible), and the warning names the fix.
+  local raw = ngx.var.upstream_http_surrogate_key or ""
+  if raw:find(",", 1, true) then
+    ngx.log(
+      ngx.WARN,
+      "dpc purge: comma in upstream Surrogate-Key (dialect is ",
+      "space-separated; send ONE space-joined header) — not recording, ",
+      "entry will refresh on every request: ",
+      key
+    )
+    return
+  end
+  local val = ngx.ctx.dpc_gen .. "|" .. raw
   -- Eviction here is benign: a recordless entry is refreshed on its next
   -- request (see rewrite()).
   local ok, err = ngx.shared.dpc_keys:set(key, val, smax + swr + KEY_TTL_SLACK)

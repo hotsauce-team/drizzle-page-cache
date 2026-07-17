@@ -153,8 +153,12 @@ local function do_purge(tags_dict, value)
         if item == "*" then
           mark(tags_dict, ALL_KEY, gen)
         elseif low:sub(1, 4) == "tag=" then
-          -- `public:` on a tag name is scope decoration — strip it.
-          local tag = item:sub(5):gsub("^public:", "")
+          -- `public:` on a tag name is scope decoration — strip it
+          -- (case-insensitively, as LiteSpeed matches it).
+          local tag = item:sub(5)
+          if tag:lower():sub(1, 7) == "public:" then
+            tag = tag:sub(8):match("^%s*(.-)%s*$")
+          end
           mark(tags_dict, tag_key(tag), gen)
         elseif low:sub(1, 4) == "url=" then
           mark(tags_dict, url_mark_key(item:sub(5)), gen)
@@ -203,7 +207,9 @@ function M.rewrite()
     ngx.var.skip_cache = 1
     return
   end
-  for tag in rec:sub(sep + 1):gmatch("%S+") do
+  -- Records are comma-joined (tags may contain internal spaces, as on a
+  -- real LiteSpeed server; commas cannot appear in a tag).
+  for tag in rec:sub(sep + 1):gmatch("[^,]+") do
     g = tags_dict:get(tag_key(tag))
     if g and g > stored_gen then
       ngx.var.skip_cache = 1
@@ -265,14 +271,23 @@ function M.log()
     or tonumber(lscc:match("max%-age=(%d+)"))
     or DEFAULT_TTL
   if ttl == 0 then return end
-  -- Tags: comma-separated; `public:` prefixes are scope decoration on a
-  -- public response — strip them. (Private tags never reach here: private
-  -- responses are rejected above.)
+  -- Tags: comma-separated ONLY, whitespace trimmed per tag — exactly what
+  -- the LiteSpeed engine does (shmcachemanager.cpp: memchr ',' + isblank
+  -- trim), so a tag may contain internal spaces and commas can never be
+  -- part of one. `public:` prefixes (case-insensitive, like LiteSpeed) are
+  -- scope decoration on a public response — strip them. (Private tags
+  -- never reach here: private responses are rejected above.)
   local tags = {}
-  for t in (ngx.var.upstream_http_x_litespeed_tag or ""):gmatch("[^,%s]+") do
-    tags[#tags + 1] = (t:gsub("^public:", ""))
+  for raw in (ngx.var.upstream_http_x_litespeed_tag or ""):gmatch("[^,]+") do
+    local t = raw:match("^%s*(.-)%s*$")
+    if t:lower():sub(1, 7) == "public:" then
+      t = t:sub(8):match("^%s*(.-)%s*$")
+    end
+    if t ~= "" then
+      tags[#tags + 1] = t
+    end
   end
-  local val = ngx.ctx.dpc_gen .. "|" .. table.concat(tags, " ")
+  local val = ngx.ctx.dpc_gen .. "|" .. table.concat(tags, ",")
   local ok, err = ngx.shared.dpc_keys:set(key, val, ttl)
   if not ok then
     ngx.log(ngx.WARN, "dpc ls-purge: key record set failed: ", err)

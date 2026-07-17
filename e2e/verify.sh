@@ -138,6 +138,10 @@ if [ -n "$PURGE_API" ]; then
   c7a=$(curl_ -o /dev/null -w '%{http_code}' -X POST "$HOST/__dpc/purge")
   echo "   POST /purge without Surrogate-Key -> $c7a"
   [ "$c7a" = "400" ] || fail "7 (missing header)" "/__dpc/purge"
+  c7comma=$(curl_ -o /dev/null -w '%{http_code}' -X POST \
+    -H "Surrogate-Key: posts:3,posts" "$HOST/__dpc/purge")
+  echo "   POST /purge comma-separated (wrong dialect) -> $c7comma"
+  [ "$c7comma" = "400" ] || fail "7 (comma rejected)" "/__dpc/purge"
   c7b=$(curl_ -o /dev/null -w '%{http_code}' -X POST \
     -H "Surrogate-Key: no-such-tag" "$HOST/__dpc/purge")
   echo "   POST /purge unknown tag -> $c7b"
