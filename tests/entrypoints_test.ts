@@ -57,6 +57,24 @@ Deno.test("souin entrypoint: site (+ default apiPath) wires the PURGE endpoint",
   assertEquals(keys.split(", ").sort(), ["dpc-unknown", "posts", "posts:3"]);
 });
 
+Deno.test("souin entrypoint: response tags are COMMA-separated (Souin's parsing)", async () => {
+  // Souin splits Surrogate-Key on commas; a space-joined header is stored
+  // as one composite tag that no purge matches (silent staleness).
+  const pageCache = createSouinPageCache({
+    schema,
+    site: "http://localhost",
+    settleMs: 1,
+  });
+  const base = createTestContext();
+  const db = pageCache.wrap(base.raw);
+  const handler = pageCache.middleware(async () => {
+    await db.select().from(posts).where(eq(posts.id, 3));
+    return new Response("<html>post 3</html>");
+  });
+  const res = await handler(new Request("http://localhost/post/3"));
+  assertEquals(res.headers.get("Surrogate-Key"), "posts:3, dpc-all");
+});
+
 Deno.test("varnish entrypoint: one PURGE to site with the xkey header", async () => {
   const pageCache = createVarnishPageCache({
     schema,
@@ -123,6 +141,12 @@ Deno.test("entrypoints: `purge` is controlled and rejected at compile time", () 
     site: "http://localhost",
     // @ts-expect-error — `purger` is wired by the souin entrypoint
     purger: noopPurger,
+  };
+  const _souinSeparator: Parameters<typeof createSouinPageCache>[0] = {
+    schema,
+    site: "http://localhost",
+    // @ts-expect-error — the separator is dialect-controlled (Souin is comma-separated)
+    headerSeparator: " ",
   };
   const _varnish: Parameters<typeof createVarnishPageCache>[0] = {
     schema,
