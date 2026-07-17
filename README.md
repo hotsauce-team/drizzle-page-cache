@@ -281,20 +281,15 @@ the way out. None of the self-hosted caches do it for you: Fastly defined the
 convention with edge-stripping built in, but Souin, for one,
 [documents delivering the header to the client](https://github.com/darkweak/souin/blob/master/pkg/surrogate/README.md).
 The reference configs in [`e2e/`](e2e/) are set up to strip it, and
-`e2e/verify.sh` asserts the tag header never reaches the client (step `2t`):
+`e2e/verify.sh` asserts the tag header never reaches the client (step `3`):
 
 | Cache                      | How to strip it                                                                                                                                                                      | Notes                                                                                                                                                                                                                        |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | nginx / Angie              | [`proxy_hide_header Surrogate-Key;`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_hide_header) in the proxied `location`                                          | Purging still works: the Lua log phase reads `$upstream_http_surrogate_key`, which `proxy_hide_header` leaves untouched.                                                                                                     |
-| Caddy / Souin              | `header -Surrogate-Key` **plus** `order header before cache`                                                                                                                         | The ordering is load-bearing — `header` must sit outside `cache` so its [deferred delete](https://caddyserver.com/docs/caddyfile/directives/header) runs _after_ Souin indexes the tag. Wrong order silently breaks purging. |
+| Caddy / Souin              | `header -Surrogate-Key` **plus** `order header before cache`                                                                                                                         | The ordering is load-bearing — `header` must sit outside `cache` so its [deferred delete](https://caddyserver.com/docs/caddyfile/directives/header) runs _after_ Souin indexes the tag. Wrong order silently breaks purging. (`disable_surrogate_key` is _not_ the fix — it turns off tag indexing entirely, so every purge misses.) |
 | Varnish (xkey)             | `unset resp.http.xkey;` in `vcl_deliver`                                                                                                                                             | `vcl_deliver` runs after the object is cached and indexed (in `vcl_backend_response`), so this is client-facing only.                                                                                                        |
 | Fastly / Surrogate-Key CDN | nothing — Fastly [strips `Surrogate-Key` before delivery](https://www.fastly.com/documentation/reference/http/http-headers/Surrogate-Key/) unless the request carries `Fastly-Debug` | Verify against your own service; other CDNs may differ.                                                                                                                                                                      |
 | OpenLiteSpeed              | see below                                                                                                                                                                            | **Cannot be stripped at the OLS layer.**                                                                                                                                                                                     |
-
-Souin's `disable_surrogate_key` option is **not** a fix: it disables the
-surrogate-key system entirely, so pages stop being indexed by tag and every
-purge this package sends silently stops matching. The egress strip above is the
-correct mechanism.
 
 **OpenLiteSpeed is the exception worth reading carefully.** OLS forwards
 `X-LiteSpeed-Tag` to the client on cache **misses** (it strips it on hits, so
