@@ -156,7 +156,25 @@ services:
       app-bun:
         condition: service_healthy
 
-  # -- 3. Varnish + Hitch (bench-only: xkey purger exists, loop not paired) ---
+  # -- 3. Varnish + Hitch (xkey tag purging; hitch is the TLS bench front) ----
+
+  app-varnish:
+    image: denoland/deno:alpine
+    working_dir: /repo
+    volumes:
+      - ../:/repo:ro
+    environment:
+      - PURGE_STYLE=varnish
+      - PURGE_SITE=http://varnish
+    command: deno run --allow-net --allow-env /repo/e2e/app/server.ts
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1:8000/ || exit 1",
+      ]
+      interval: 3s
+      timeout: 2s
+      retries: 30
 
   # Varnish (cache, no TLS) + hitch (TLS termination, PROXY protocol into
   # varnish). The classic split-process stack.
@@ -170,7 +188,7 @@ services:
     ports:
       - "127.0.0.1:18086:80"
     depends_on:
-      app:
+      app-varnish:
         condition: service_healthy
 
   hitch:

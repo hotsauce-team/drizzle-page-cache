@@ -9,9 +9,9 @@ Tag-based HTTP page-cache invalidation for
 Put any Drizzle app behind a tag-aware HTTP cache (Caddy/Souin, Varnish xkey,
 Fastly, OpenLiteSpeed — or plain nginx/Angie made tag-aware by this package's
 Lua helper) and get **automatic, event-driven invalidation**: cache tags are
-derived from the queries each request actually executes, emitted as a
-`Surrogate-Key` response header, and purged when writes touch the same tables or
-rows.
+derived from the queries each request actually executes, emitted as a response
+header in the cache's dialect (`Surrogate-Key`, `xkey`, `X-LiteSpeed-Tag`), and
+purged when writes touch the same tables or rows.
 
 > [!NOTE]
 > This is **not**
@@ -344,7 +344,9 @@ Which cache should you run? Two questions decide it:
     benchmarks. The trades are learning a new server, and a purge model that is
     header-driven and eventually consistent by a few seconds.
 
-All of those are e2e-verified; Varnish is benchmark-only here (see its caveat).
+All of those are e2e-verified, Varnish included (`e2e/verify.sh` proves the
+write → purge → fresh-content loop, and that the tag header is stripped, against
+every pairing).
 
 Each supported cache has a directory entrypoint — drizzle-adapter style — that
 wires its purger from a `site` URL. Entrypoints are named by **wire dialect**,
@@ -403,29 +405,47 @@ is verified by `e2e/verify.sh caddy` (and `caddy-node`, `caddy-bun`).
 
 ### Varnish (xkey)
 
-The entrypoint sends one `PURGE` to `site` with the tags in an `xkey` header, so
-your VCL needs the **xkey vmod** and a PURGE handler:
+The entrypoint emits the tags in an `xkey` **response** header — the one the
+xkey vmod registers keys from automatically on `import xkey;` (it never reads
+`Surrogate-Key`) — and sends one `PURGE` to `site` with the tags in an `xkey`
+request header. So your VCL needs the **xkey vmod** and a PURGE handler:
 
 ```vcl
 vcl 4.1;
 import xkey;
 
+# Varnish applies no auth to PURGE — restrict it to your app's network.
+acl purge_allow { "localhost"; /* + your app hosts */ }
+
 sub vcl_recv {
   if (req.method == "PURGE") {
+    if (client.ip !~ purge_allow) { return (synth(403, "Forbidden")); }
     # invalidate every object tagged with any key in the xkey header
     set req.http.n-purged = xkey.purge(req.http.xkey);
     return (synth(200, "Purged " + req.http.n-purged));
   }
 }
+
+sub vcl_deliver {
+  # Custom config REQUIRED to strip the tag header: vmod-xkey does not
+  # remove `xkey` from responses, and it names your tables and row IDs.
+  # vcl_deliver runs after the object was indexed (vcl_backend_response),
+  # so purging is unaffected.
+  unset resp.http.xkey;
+}
 ```
 
-Guard `PURGE` with an ACL in production — Varnish applies no auth to it.
-**Caveat: this purge path is not exercised by the e2e suite.** Varnish is a
-benchmark-only pairing here (`e2e/varnish/default.vcl` caches for the hit/TLS
-benches but implements no xkey purging), so — unlike nginx/Angie/OLS/Souin —
-there is no `verify.sh` proof of the write → purge loop against Varnish. The
-purger and header shape are unit-tested (`tests/entrypoints_test.ts`), and the
-VCL above is standard xkey usage, but validate it in your environment.
+`xkey.purge` is a hard purge, which is what you want with this package's
+`stale-while-revalidate`: Varnish maps that to grace, so `xkey.softpurge` would
+keep serving the stale body until grace ran out — the purge would look like a
+no-op. Note the `unset resp.http.xkey` is not optional hygiene: no part of
+Varnish strips the tag header for you (see
+[Security](#security-the-tag-header-leaks-row-ids)).
+
+The write → purge → fresh-content loop and the header strip are verified by
+`e2e/verify.sh varnish`; the working config to copy is
+[`e2e/varnish/default.vcl`](e2e/varnish/default.vcl) (including a
+compose-network `purge_allow` ACL).
 
 ### LiteSpeed / OpenLiteSpeed
 

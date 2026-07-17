@@ -10,8 +10,9 @@
 #   ./bench.sh ols caddy    # specific targets
 #
 # Targets: app (no cache, baseline) | ols (OpenLiteSpeed) | caddy (Souin+otter)
-#          | caddy-node | caddy-bun | varnish (+hitch for TLS; exercises no
-#          purging) | angie | nginx (both: Lua skip-cache wildcard URL purging)
+#          | caddy-node | caddy-bun | varnish (+hitch for TLS; xkey purge loop
+#          covered by verify.sh, not benched) | angie | nginx (both: Lua
+#          skip-cache wildcard URL purging)
 #
 # Tuning parity (so the comparison is fair):
 #   nginx/angie  worker_processes auto, cache on /dev/shm (tmpfs), upstream
@@ -47,8 +48,8 @@ containers_for() {
     caddy) echo "$PREFIX-caddy-1 $PREFIX-app-1" ;;
     caddy-node) echo "$PREFIX-caddy-node-1 $PREFIX-app-node-1" ;;
     caddy-bun) echo "$PREFIX-caddy-bun-1 $PREFIX-app-bun-1" ;;
-    varnish) echo "$PREFIX-varnish-1 $PREFIX-app-1" ;;
-    varnish-tls) echo "$PREFIX-hitch-1 $PREFIX-varnish-1 $PREFIX-app-1" ;;
+    varnish) echo "$PREFIX-varnish-1 $PREFIX-app-varnish-1" ;;
+    varnish-tls) echo "$PREFIX-hitch-1 $PREFIX-varnish-1 $PREFIX-app-varnish-1" ;;
     angie) echo "$PREFIX-angie-1 $PREFIX-app-angie-1" ;;
     nginx) echo "$PREFIX-nginx-1 $PREFIX-app-nginx-1" ;;
     *) echo "unknown target: $1" >&2; exit 1 ;;
