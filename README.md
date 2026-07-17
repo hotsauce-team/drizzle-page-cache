@@ -6,11 +6,12 @@ Tag-based HTTP page-cache invalidation for
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Runtimes: Deno · Node · Bun](https://img.shields.io/badge/runtimes-Deno%20%C2%B7%20Node%20%C2%B7%20Bun-lightgrey.svg)](#installation)
 
-Put any Drizzle app behind a tag-aware HTTP cache (OpenLiteSpeed, Caddy/Souin,
-Varnish xkey, Fastly — or plain nginx/Angie made tag-aware by this package's Lua
-helper) and get **automatic, event-driven invalidation**: cache tags are derived
-from the queries each request actually executes, emitted as a `Surrogate-Key`
-response header, and purged when writes touch the same tables or rows.
+Put any Drizzle app behind a tag-aware HTTP cache (Caddy/Souin, Varnish xkey,
+Fastly, OpenLiteSpeed — or plain nginx/Angie made tag-aware by this package's
+Lua helper) and get **automatic, event-driven invalidation**: cache tags are
+derived from the queries each request actually executes, emitted as a
+`Surrogate-Key` response header, and purged when writes touch the same tables or
+rows.
 
 > [!NOTE]
 > This is **not**
@@ -24,9 +25,10 @@ response header, and purged when writes touch the same tables or rows.
 **Contents:** [Why a page cache?](#why-a-page-cache) ·
 [Installation](#installation) · [Quickstart](#quickstart) ·
 [What gets cached](#what-gets-cached) · [Tag model](#tag-model) ·
-[Purgers](#purgers) · [Performance](#performance) ·
-[Observability](#observability) · [Namespacing](#namespacing-tagprefix) ·
-[Development](#development) · [License](#license)
+[Security](#security-the-tag-header-leaks-row-ids) · [Purgers](#purgers) ·
+[Performance](#performance) · [Observability](#observability) ·
+[Namespacing](#namespacing-tagprefix) · [Development](#development) ·
+[License](#license)
 
 ## Why a page cache?
 
@@ -125,19 +127,21 @@ Souin is a Caddy plugin, so it takes a custom-built Caddy binary (a two-line
 ```
 {
   order cache before rewrite
+  order header before cache   # run the strip below AFTER Souin reads the tags
   cache {
     ttl 300s
     api { souin }   # exposes the purge API at /souin-api/souin
   }
 }
 :80 {
+  header -Surrogate-Key   # tags name your tables + row IDs — keep them off clients
   cache
   reverse_proxy your-app:8000
 }
 ```
 
-Every cacheable response (see [What gets cached](#what-gets-cached) — by default
-`GET` and 2xx) now carries:
+Your app now tags every cacheable response (see
+[What gets cached](#what-gets-cached) — by default `GET` and 2xx) with:
 
 ```
 Surrogate-Key: posts:7 users dpc-all
@@ -146,6 +150,11 @@ Cache-Control: max-age=0, s-maxage=3600, stale-while-revalidate=30
 
 `max-age=0` is deliberate: browsers can't be purged, so only _shared_ caches
 hold pages.
+
+> [!IMPORTANT]
+> That `Surrogate-Key` header names your tables and row IDs. It's for the cache,
+> not the browser — the config above strips it before it reaches clients. For
+> other proxies, see [Security](#security-the-tag-header-leaks-row-ids).
 
 When a write executes — `db.update(posts).set(...).where(eq(posts.id, 7))` — the
 matching tags (`posts:7`, `posts`) are purged automatically, batched and
@@ -250,13 +259,65 @@ import { pageCache } from "./cache.ts"; // the same instance your app builds
 await pageCache.purgeAll(); // immediate; throws → deploy fails loudly
 ```
 
-`createPageCache` needs no DB connection for this — `schema` is a plain
-import, and `purgeAll()` only talks to the proxy. No JS runtime in the
-pipeline? Purge the literal tag (mind your `tagPrefix`) with one request in
-each dialect, e.g. nginx/Angie:
+`createPageCache` needs no DB connection for this — `schema` is a plain import,
+and `purgeAll()` only talks to the proxy. No JS runtime in the pipeline? Purge
+the literal tag (mind your `tagPrefix`) with one request in each dialect, e.g.
+nginx/Angie:
 `curl -X POST http://proxy/__dpc/purge -H 'Surrogate-Key: dpc-all'`. Note the
-scope: `purgeAll()` evicts what **this cache tagged** — pages a proxy cached
-by its own config (no headers from us) only expire by TTL.
+scope: `purgeAll()` evicts what **this cache tagged** — pages a proxy cached by
+its own config (no headers from us) only expire by TTL.
+
+## Security: the tag header leaks row IDs
+
+The whole mechanism rides on a response header —
+`Surrogate-Key: posts:7 users:3 dpc-all` (or `X-LiteSpeed-Tag`, or `xkey`,
+depending on dialect) — that spells out **your table names and primary-key
+values**. It's meant for the cache in front of your app, not the browser. Left
+visible, it hands every visitor your schema and lets them enumerate row IDs
+(worse with sequential integer PKs, where `posts:7` says there are at least
+seven posts).
+
+**Stripping it is the proxy's job** — and it can't be done from the app, because
+the proxy has to _read_ the header to index the cached page, then remove it on
+the way out. None of the self-hosted caches do it for you: Fastly defined the
+convention with edge-stripping built in, but Souin, for one,
+[documents delivering the header to the client](https://github.com/darkweak/souin/blob/master/pkg/surrogate/README.md).
+The reference configs in [`e2e/`](e2e/) are set up to strip it, and
+`e2e/verify.sh` asserts the tag header never reaches the client (step `3`):
+
+| Cache                      | How to strip it                                                                                                                                                                      | Notes                                                                                                                                                                                                                        |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| nginx / Angie              | [`proxy_hide_header Surrogate-Key;`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_hide_header) in the proxied `location`                                          | Purging still works: the Lua log phase reads `$upstream_http_surrogate_key`, which `proxy_hide_header` leaves untouched.                                                                                                     |
+| Caddy / Souin              | `header -Surrogate-Key` **plus** `order header before cache`                                                                                                                         | The ordering is load-bearing — `header` must sit outside `cache` so its [deferred delete](https://caddyserver.com/docs/caddyfile/directives/header) runs _after_ Souin indexes the tag. Wrong order silently breaks purging. (`disable_surrogate_key` is _not_ the fix — it turns off tag indexing entirely, so every purge misses.) |
+| Varnish (xkey)             | `unset resp.http.xkey;` in `vcl_deliver`                                                                                                                                             | `vcl_deliver` runs after the object is cached and indexed (in `vcl_backend_response`), so this is client-facing only.                                                                                                        |
+| Fastly / Surrogate-Key CDN | nothing — Fastly [strips `Surrogate-Key` before delivery](https://www.fastly.com/documentation/reference/http/http-headers/Surrogate-Key/) unless the request carries `Fastly-Debug` | Verify against your own service; other CDNs may differ.                                                                                                                                                                      |
+| OpenLiteSpeed              | see below                                                                                                                                                                            | **Cannot be stripped at the OLS layer.**                                                                                                                                                                                     |
+
+**OpenLiteSpeed is the exception worth reading carefully.** OLS forwards
+`X-LiteSpeed-Tag` to the client on cache **misses** (it strips it on hits, so
+it's easy to miss in casual testing). Its only response-header operation,
+`extraHeaders unset X-LiteSpeed-Tag`, _also_ removes the tag the LSCache module
+indexes on — so stripping the leak breaks tag purging (verified in the e2e
+suite; `verify.sh ols` prints a `WARN` about this rather than failing). This is
+a known OpenLiteSpeed limitation (an upstream fix is in progress). Two ways out:
+strip it at a CDN/edge in front of OLS, or front OLS with the bundled nginx-LS
+config ([`e2e/nginx/nginx-ls.conf`](e2e/nginx/nginx-ls.conf)), which hides
+`X-LiteSpeed-Tag` cleanly because the Lua reads the `$upstream_http_*` copy the
+strip doesn't touch.
+
+**Confirm it against your own edge** — the only header that's safe is the one
+you've checked is gone from what clients actually receive:
+
+```sh
+curl -sI https://your-site.example/any-page |
+  grep -i 'surrogate-key\|x-litespeed-tag\|xkey'
+# no output = not leaking
+```
+
+Stripping the wire header isn't the whole story: `debug: true` stamps the same
+table and row identifiers onto a _separate_ `X-Cache-Tags` header on every
+response (see [Observability](#observability)), and your proxy strips
+`Surrogate-Key`, not that one — so keep `debug` off in production.
 
 ## Purgers
 
@@ -373,6 +434,12 @@ tag header, its own cache-control header, and **header-driven purging** (the
 purge instruction rides a backend response _through_ the proxy). Use the
 dedicated entrypoint — drizzle-adapter style — which derives the whole dialect
 from three inputs:
+
+> [!WARNING]
+> OLS leaks `X-LiteSpeed-Tag` to clients on cache misses and can't strip it
+> without breaking purging — the one case where the tag header can't be hidden
+> at the cache layer. See [Security](#security-the-tag-header-leaks-row-ids) for
+> the two workarounds before going to production.
 
 ```ts
 import { createPageCache } from "drizzle-page-cache/litespeed";

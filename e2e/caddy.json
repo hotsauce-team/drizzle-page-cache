@@ -76,6 +76,15 @@
             {
               "handle": [
                 {
+                  "handler": "headers",
+                  "response": {
+                    "deferred": true,
+                    "delete": [
+                      "Surrogate-Key"
+                    ]
+                  }
+                },
+                {
                   "Configuration": {
                     "API": {
                       "basepath": "",
@@ -189,6 +198,15 @@
           "routes": [
             {
               "handle": [
+                {
+                  "handler": "headers",
+                  "response": {
+                    "deferred": true,
+                    "delete": [
+                      "Surrogate-Key"
+                    ]
+                  }
+                },
                 {
                   "Configuration": {
                     "API": {

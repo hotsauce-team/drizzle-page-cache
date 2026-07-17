@@ -1,5 +1,9 @@
 {
 	order cache before rewrite
+	# `header` must sit OUTSIDE `cache` in the chain so its egress cleanup runs
+	# AFTER Souin has read and stored Surrogate-Key — otherwise the strip below
+	# would remove the tag before Souin indexes it and purging would break.
+	order header before cache
 	cache {
 		ttl 300s
 		otter
@@ -19,6 +23,10 @@
 # serves all three pairings, each container dialing its own app via the
 # UPSTREAM env var in docker-compose.yml.
 :80 {
+	# Don't leak the tags to clients: Surrogate-Key carries schema names and
+	# row IDs. Souin still reads it upstream (ordered above); this strips it
+	# from the client-facing response only.
+	header -Surrogate-Key
 	cache
 	reverse_proxy {env.UPSTREAM}
 }
@@ -28,6 +36,7 @@
 # handshake — the Caddyfile cannot express that.
 :443 {
 	tls /certs/cert.pem /certs/key.pem
+	header -Surrogate-Key
 	cache
 	reverse_proxy {env.UPSTREAM}
 }
