@@ -75,9 +75,22 @@ echo "== target: $HOST =="
 # purge_litespeed.lua (nginx-ls) is purged by response headers instead.
 case "$HOST" in angie | nginx | nginx-ls) LUA=1 ;; *) LUA="" ;; esac
 case "$HOST" in angie | nginx) PURGE_API=1 ;; *) PURGE_API="" ;; esac
+# The tag header carries schema names and row IDs — it is the proxy's job to
+# strip it before the client sees it (see README "Security"). Which header
+# depends on the dialect: LiteSpeed uses X-LiteSpeed-Tag, everyone else
+# Surrogate-Key. Souin leaks on hit AND miss, OLS on the miss only, so the
+# assertion below checks both.
+case "$HOST" in ols | nginx-ls) TAG_HEADER='x-litespeed-tag' ;; *) TAG_HEADER='surrogate-key' ;; esac
+
+# Assert the dialect tag header did NOT reach the client for $1 (a step label
+# in $2). Runs its own request, so pass a fresh path to test a MISS.
+no_tag_leak() {
+  leak=$(curl_ -D - -o /dev/null "$HOST$1" | grep -i "^$TAG_HEADER:" || true)
+  [ -z "$leak" ] || { echo "   LEAK: $leak"; fail "$2 (tag header leaked)" "$1"; }
+}
 
 # Unique query string per run: step 1 is a genuine MISS even on a warm cache,
-# and step 5 additionally proves purges reach query-string variants.
+# and step 6 additionally proves purges reach query-string variants.
 V="$(date +%s)"
 P="/post/3?v=$V"
 
@@ -103,77 +116,94 @@ if [ -n "$LUA" ]; then
   echo "$s2c" | grep -qi 'hit' || fail 2c "/"
 fi
 
-echo "3) body snapshot before write"
+echo "3) the tag header does not leak to clients"
+no_tag_leak "$P" 3   # $P is warm → the HIT; every proxy must strip on hits
+if [ "$HOST" = "ols" ]; then
+  # Native OLS forwards X-LiteSpeed-Tag on cache MISSES and cannot strip it at
+  # its own layer: the only response-header op (extraHeaders unset) also drops
+  # the tag the LSCache module indexes on, which breaks purging (verified).
+  # Known OLS limitation (upstream fix in progress). Until fixed: strip at an
+  # edge/CDN in front, or front OLS with the nginx-ls config. See README
+  # "Security".
+  ml=$(curl_ -D - -o /dev/null "$HOST/post/4?leak=$V" | grep -i "^$TAG_HEADER:" || true)
+  [ -z "$ml" ] && echo "   ok (no leak on miss either)" ||
+    echo "   WARN: OLS leaks $TAG_HEADER on MISS (known; strip at edge) — $ml"
+else
+  no_tag_leak "/post/4?leak=$V" 3   # fresh path → this request is the MISS
+  echo "   ok (no $TAG_HEADER reached the client)"
+fi
+
+echo "4) body snapshot before write"
 before=$(curl_ "$HOST$P")
 
-echo "4) write via POST (uncached), triggers tag purge"
+echo "5) write via POST (uncached), triggers tag purge"
 curl_ -X POST -d "title=Edited+$(date +%s)" "$HOST/edit/3" > /dev/null
 sleep "$PURGE_WAIT"
 
-echo "5) next request is a MISS with fresh content"
+echo "6) next request is a MISS with fresh content"
 s3=$(status "$P"); echo "   $s3"
-echo "$s3" | grep -qvi 'hit' || fail 5 "$P"
+echo "$s3" | grep -qvi 'hit' || fail 6 "$P"
 after=$(curl_ "$HOST$P")
 { [ "$before" != "$after" ] && echo "$after" | grep -q 'Edited'; } ||
-  fail "5 (body)" "$P"
+  fail "6 (body)" "$P"
 
 if [ -n "$LUA" ]; then
-  echo "5b) the write purged the row tag as a BYPASS, not a coincidence"
-  echo "$s3" | grep -qi 'bypass' || fail 5b "$P"
-  echo "5c) the list page (tag: posts) was refreshed with the new title"
+  echo "6b) the write purged the row tag as a BYPASS, not a coincidence"
+  echo "$s3" | grep -qi 'bypass' || fail 6b "$P"
+  echo "6c) the list page (tag: posts) was refreshed with the new title"
   s5c=$(status "/"); echo "   $s5c"
-  echo "$s5c" | grep -qi 'bypass' || fail 5c "/"
-  curl_ "$HOST/" | grep -q 'Edited' || fail "5c (body)" "/"
-  echo "5d) precision: the unwritten row is STILL a HIT (no over-purge)"
+  echo "$s5c" | grep -qi 'bypass' || fail 6c "/"
+  curl_ "$HOST/" | grep -q 'Edited' || fail "6c (body)" "/"
+  echo "6d) precision: the unwritten row is STILL a HIT (no over-purge)"
   s5d=$(status "$W"); echo "   $s5d"
-  echo "$s5d" | grep -qi 'hit' || fail 5d "$W"
+  echo "$s5d" | grep -qi 'hit' || fail 6d "$W"
 fi
 
-echo "6) the refreshed entry is cacheable again (HIT)"
+echo "7) the refreshed entry is cacheable again (HIT)"
 s6=$(status "$P"); echo "   $s6"
-echo "$s6" | grep -qi 'hit' || fail 6 "$P"
+echo "$s6" | grep -qi 'hit' || fail 7 "$P"
 
 if [ -n "$PURGE_API" ]; then
-  echo "7) purge API contract (/__dpc/, Fastly-shaped routes)"
+  echo "8) purge API contract (/__dpc/, Fastly-shaped routes)"
   c7a=$(curl_ -o /dev/null -w '%{http_code}' -X POST "$HOST/__dpc/purge")
   echo "   POST /purge without Surrogate-Key -> $c7a"
-  [ "$c7a" = "400" ] || fail "7 (missing header)" "/__dpc/purge"
+  [ "$c7a" = "400" ] || fail "8 (missing header)" "/__dpc/purge"
   c7comma=$(curl_ -o /dev/null -w '%{http_code}' -X POST \
     -H "Surrogate-Key: posts:3,posts" "$HOST/__dpc/purge")
   echo "   POST /purge comma-separated (wrong dialect) -> $c7comma"
-  [ "$c7comma" = "400" ] || fail "7 (comma rejected)" "/__dpc/purge"
+  [ "$c7comma" = "400" ] || fail "8 (comma rejected)" "/__dpc/purge"
   c7b=$(curl_ -o /dev/null -w '%{http_code}' -X POST \
     -H "Surrogate-Key: no-such-tag" "$HOST/__dpc/purge")
   echo "   POST /purge unknown tag -> $c7b"
-  [ "$c7b" = "200" ] || fail "7 (unknown tag)" "/__dpc/purge"
+  [ "$c7b" = "200" ] || fail "8 (unknown tag)" "/__dpc/purge"
   b7=$(curl_ -X POST -H "Surrogate-Key: no-such-tag" "$HOST/__dpc/purge")
   echo "   headerless purge echoes the mark-TTL cap: $b7"
-  echo "$b7" | grep -q '"markTtl":2592000' || fail "7 (markTtl cap)" "/__dpc/purge"
+  echo "$b7" | grep -q '"markTtl":2592000' || fail "8 (markTtl cap)" "/__dpc/purge"
   b7x=$(curl_ -X POST -H "Surrogate-Key: no-such-tag" \
     -H "X-DPC-Mark-TTL: 120" "$HOST/__dpc/purge")
   echo "   X-DPC-Mark-TTL sizes the mark: $b7x"
-  echo "$b7x" | grep -q '"markTtl":120' || fail "7 (markTtl header)" "/__dpc/purge"
+  echo "$b7x" | grep -q '"markTtl":120' || fail "8 (markTtl header)" "/__dpc/purge"
   s7=$(status "$P"); echo "   $s7"
-  echo "$s7" | grep -qi 'hit' || fail "7 (still hit)" "$P"
+  echo "$s7" | grep -qi 'hit' || fail "8 (still hit)" "$P"
   c7c=$(curl_ -o /dev/null -w '%{http_code}' "$HOST/__dpc/purge")
   echo "   GET /purge -> $c7c"
-  [ "$c7c" = "405" ] || fail "7 (method)" "/__dpc/purge"
+  [ "$c7c" = "405" ] || fail "8 (method)" "/__dpc/purge"
 
-  echo "7b) single-tag route evicts exactly its row"
+  echo "8b) single-tag route evicts exactly its row"
   c7d=$(curl_ -o /dev/null -w '%{http_code}' -X POST "$HOST/__dpc/purge/posts:2")
-  [ "$c7d" = "200" ] || fail "7b (single purge)" "/__dpc/purge/posts:2"
+  [ "$c7d" = "200" ] || fail "8b (single purge)" "/__dpc/purge/posts:2"
   s7b=$(status "$W"); echo "   $s7b"
-  echo "$s7b" | grep -qi 'bypass' || fail "7b (witness evicted)" "$W"
+  echo "$s7b" | grep -qi 'bypass' || fail "8b (witness evicted)" "$W"
   s7c=$(status "$P"); echo "   $s7c"
-  echo "$s7c" | grep -qi 'hit' || fail "7b (other row untouched)" "$P"
+  echo "$s7c" | grep -qi 'hit' || fail "8b (other row untouched)" "$P"
 
-  echo "7c) purge_all evicts everything"
+  echo "8c) purge_all evicts everything"
   c7e=$(curl_ -o /dev/null -w '%{http_code}' -X POST "$HOST/__dpc/purge_all")
-  [ "$c7e" = "200" ] || fail "7c (purge_all)" "/__dpc/purge_all"
+  [ "$c7e" = "200" ] || fail "8c (purge_all)" "/__dpc/purge_all"
   s7d=$(status "$P"); echo "   $s7d"
-  echo "$s7d" | grep -qi 'bypass' || fail "7c (evicted)" "$P"
+  echo "$s7d" | grep -qi 'bypass' || fail "8c (evicted)" "$P"
   s7e=$(status "$P"); echo "   $s7e"
-  echo "$s7e" | grep -qi 'hit' || fail "7c (hit again)" "$P"
+  echo "$s7e" | grep -qi 'hit' || fail "8c (hit again)" "$P"
 fi
 
 echo "PASS: purge loop verified against $HOST"
